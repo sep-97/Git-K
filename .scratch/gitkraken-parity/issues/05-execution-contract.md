@@ -22,3 +22,5 @@ The user asked to move to the next level after confirming that no application ex
 ## Prototype evidence
 
 [Validation and bounded verdict](../../../apps/command-prototype/VALIDATION.md): the Windows native walkthrough passed; eight real Git reads remained recorded while the panel was collapsed, and an actual Git failure retained exit 128 and stderr. The throwaway source is captured on `prototype/execution-history`, outside main. User review and the remaining interactive, coordination, recovery and retention decisions are still required before resolution.
+
+The user requested the next feature. The `prototype/file-staging` extension adds whole-file index changes with separate staged/unstaged views; [staging findings](../../../apps/command-prototype/STAGING.md) record successful native workflows, unchanged working-file hashes, and truthful index-lock failure/retry. This remains prototype evidence and does not resolve the broader contract.

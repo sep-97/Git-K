@@ -18,6 +18,7 @@ struct Runtime {
     events: Arc<Mutex<Vec<Event>>>,
     next: Arc<AtomicU64>,
     watch: Arc<AtomicBool>,
+    mutation: Arc<Mutex<()>>,
 }
 impl Runtime {
     fn event(&self, operation: u64, kind: &str, text: impl Into<String>) {
@@ -106,29 +107,39 @@ fn repository(input: &str) -> Result<PathBuf, String> {
 }
 fn display_path(path: &Path) -> String { path.display().to_string().trim_start_matches("\\\\?\\").to_string() }
 #[derive(Serialize)]
-struct FileChange { path: String, state: String }
+struct FileChange { path: String, state: String, previous: Option<String> }
 #[derive(Serialize)]
 struct Commit { sha: String, parents: Vec<String>, subject: String, author: String, age: String, refs: String }
 #[derive(Serialize)]
 struct Snapshot { path: String, branch: String, head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<String> }
+fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
+    let status = runtime.git(path, &["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
+    let mut entries = status.split('\0').filter(|s| !s.is_empty());
+    let mut files = Vec::new();
+    while let Some(entry) = entries.next() {
+        if entry.len() < 3 { continue; }
+        let state = entry[..2].to_string();
+        let previous = if state.contains('R') || state.contains('C') { entries.next().map(String::from) } else { None };
+        files.push(FileChange { path: entry[3..].into(), state, previous });
+    }
+    Ok(files)
+}
+fn conflicted(file: &FileChange) -> bool { ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].contains(&file.state.as_str()) }
+fn pending(file: &FileChange, stage: bool) -> bool {
+    if conflicted(file) { return false; }
+    if stage { file.state == "??" || file.state.as_bytes()[1] != b' ' }
+    else { file.state != "??" && file.state.as_bytes()[0] != b' ' }
+}
 fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     runtime.event(0, "local", format!("Open / refresh repository: {input}"));
     let requested = repository(&input)?;
     let root = runtime.git(&requested, &["rev-parse", "--show-toplevel"])?;
     let path = PathBuf::from(root.trim());
     let branch = runtime.git(&path, &["branch", "--show-current"])?;
-    let status = runtime.git(&path, &["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
-    let mut entries = status.split('\0').filter(|s| !s.is_empty());
-    let mut files = Vec::new();
-    while let Some(entry) = entries.next() {
-        if entry.len() < 3 { continue; }
-        let state = entry[..2].to_string();
-        files.push(FileChange { path: entry[3..].into(), state: state.clone() });
-        if state.contains('R') || state.contains('C') { entries.next(); }
-    }
+    let files = changes(&runtime, &path)?;
     let branches = runtime.git(&path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
-    let head = runtime.git(&path, &["rev-parse", "--verify", "HEAD"]);
-    let commits = if head.is_ok() {
+    let head = runtime.git(&path, &["rev-parse", "--revs-only", "HEAD"])?;
+    let commits = if !head.trim().is_empty() {
         let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D"])?;
         history.lines().filter_map(|line| {
             let fields: Vec<_> = line.split('\x1f').collect();
@@ -136,7 +147,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
             Some(Commit { sha: fields[0].into(), parents: fields[1].split_whitespace().map(String::from).collect(), subject: fields[2].into(), author: fields[3].into(), age: fields[4].into(), refs: fields[5].into() })
         }).collect()
     } else { Vec::new() };
-    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.unwrap_or_default().trim().into(), files, commits, branches: branches.lines().map(String::from).collect() })
+    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches: branches.lines().map(String::from).collect() })
 }
 #[tauri::command]
 fn initial_path() -> String {
@@ -161,22 +172,63 @@ async fn open_repository(runtime: tauri::State<'_, Runtime>, path: String) -> Re
     tauri::async_runtime::spawn_blocking(move || snapshot(runtime, path)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: String, untracked: bool) -> Result<String, String> {
+async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: String, side: String) -> Result<String, String> {
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let root = repository(&path)?;
         let relative = Path::new(&file);
         if relative.is_absolute() || relative.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_))) { return Err("File must belong to the selected repository.".into()); }
-        if untracked {
+        if side == "untracked" {
             let selected = root.join(relative).canonicalize().map_err(|e| e.to_string())?;
             if !selected.starts_with(&root) { return Err("Selected file resolves outside this repository.".into()); }
             runtime.event(0, "local", format!("Read untracked file: {file}"));
             let bytes = fs::read(selected).map_err(|e| e.to_string())?;
             return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
-        let unstaged = runtime.git(&root, &["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
-        let staged = runtime.git(&root, &["--literal-pathspecs", "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
-        Ok(format!("{unstaged}{staged}"))
+        let files = changes(&runtime, &root)?;
+        let change = files.iter().find(|entry| entry.path == file);
+        let mut args = vec!["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-color"];
+        match side.as_str() { "staged" => args.push("--cached"), "unstaged" => {}, _ => return Err("Choose staged or unstaged changes.".into()) }
+        args.extend(["--", &file]);
+        if side == "staged" { if let Some(previous) = change.and_then(|entry| entry.previous.as_deref()) { args.push(previous); } }
+        runtime.git(&root, &args)
+    }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Option<String>, stage: bool) -> Result<Snapshot, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another index change is still running.".to_string())?;
+        let requested = repository(&path)?;
+        let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
+        let files = changes(&runtime, &root)?;
+        if files.iter().any(conflicted) { return Err("Resolve repository conflicts before using this prototype's staging controls.".into()); }
+        let candidates: Vec<_> = files.iter().filter(|entry| pending(entry, stage)).collect();
+        let mut paths = Vec::new();
+        if let Some(selected) = &file {
+            let entry = candidates.iter().find(|entry| entry.path == *selected).ok_or("The selected change is no longer available. Refresh and try again.")?;
+            paths.push(entry.path.as_str());
+            if (!stage && entry.state.starts_with('R')) || (stage && entry.state.as_bytes()[1] == b'R') {
+                if let Some(previous) = entry.previous.as_deref() { paths.push(previous); }
+            }
+        } else {
+            if candidates.is_empty() { return Err("No changes are available for this action.".into()); }
+            paths.push(".");
+        }
+        runtime.event(0, "local", format!("{}: {}", if stage { "Stage changes" } else { "Unstage changes" }, file.as_deref().unwrap_or("all files")));
+        if stage {
+            let mut args = vec!["--literal-pathspecs", "add", "--all", "--"];
+            args.extend(paths);
+            runtime.git(&root, &args)?;
+        } else {
+            // --revs-only returns empty output for an unborn branch, without a failing lookup.
+            let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
+            let mut args = if !head.trim().is_empty() { vec!["--literal-pathspecs", "restore", "--staged", "--source=HEAD", "--"] }
+                else { vec!["--literal-pathspecs", "rm", "--cached", "--force", "-r", "--ignore-unmatch", "--"] };
+            args.extend(paths);
+            runtime.git(&root, &args)?;
+        }
+        snapshot(runtime.clone(), display_path(&root))
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
@@ -259,6 +311,6 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 }
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }

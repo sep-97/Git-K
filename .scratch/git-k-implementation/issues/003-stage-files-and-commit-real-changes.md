@@ -49,6 +49,8 @@ A source checkpoint can contain multiple subcases. The primary owner keeps compl
 
 [Core audit](../../../docs/research/core-parity.md), [connected audit](../../../docs/research/connected-parity.md), [runtime investigation](../../../docs/research/runtime-architecture.md), [coverage](../coverage.md), and [specification](../spec.md).
 
+Prototype context: `prototype/file-staging` extends the native execution harness with whole-file stage/unstage workflows. [Scope and findings](../../../apps/command-prototype/STAGING.md) inform the execution contract. Commit creation and remaining production criteria are not implemented; this issue remains blocked.
+
 ## Publication
 
 Published from the user-approved breakdown on October 30, 2026. The reviewed planning snapshot is commit 54a029b8beaad7203adcca2c44631c96b1c6b798. This file now owns the work state and acceptance criteria.
