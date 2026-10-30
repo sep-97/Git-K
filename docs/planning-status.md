@@ -58,6 +58,8 @@ flowchart TD
 
 ## Next work
 
+The user approved complete-workflow testing and the breakdown on October 30, 2026. The [published implementation tracker](../.scratch/git-k-implementation/README.md) contains 125 feature/delivery slices and one final verification gate. Nine envelopes remain pending decisions and decomposition. The [approved breakdown](implementation-draft/breakdown.md) preserves the plan; open map decisions remain open and continue to block dependent production work.
+
 Work the execution-contract prototype with real temporary repositories and the user's review. Preserve truth about command arguments/output, application versus shell origin, hidden-panel recording, failures, prompts, cancellation and shared-worktree state. The [evidence proposal](parity-evidence-proposal.md) remains an input for the later acceptance decision.
 
 After the map's remaining decisions are resolved, continue through specification, dependency-linked implementation tickets and production implementation. Full parity remains the destination; ordering work does not reduce it.
