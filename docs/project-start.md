@@ -1,6 +1,6 @@
 # Git manager project start
 
-Status: wayfinding map charted and research in progress; application implementation has not started.
+Status: wayfinding map charted and three initial research investigations integrated; application implementation has not started.
 Recorded: October 30, 2026 (Asia/Tehran).
 
 ## Confirmed requirements
@@ -23,6 +23,8 @@ Version 12.6.1 includes terminal tab navigation and reordering, worktree display
 ## Initial coverage inventory
 
 This is an index for the detailed audit, not an exhaustive specification. Every area below is unimplemented. Each must later expand into individual controls, actions, state transitions, shortcuts, settings, error handling, provider variations, and acceptance scenarios. No area is excluded by its position in this table.
+
+The initial research is now available: [252 desktop/core checkpoints](research/core-parity.md), [133 connected-feature entries](research/connected-parity.md), and [15 runtime mechanism findings](research/runtime-architecture.md). These counts describe indexed research, not unique implemented features; some entry points overlap between audits.
 
 | Area | Coverage to audit | Primary reference |
 | --- | --- | --- |
@@ -58,8 +60,7 @@ These are design proposals to validate during wayfinding:
 ## Environment observations
 
 - This workspace initially contained only work/ and outputs/; no application, Git repository, remote, or agent configuration was present.
-- Git, Node and npm are on PATH.
-- rustc, cargo and gh are not on the current PATH. This does not prove they are absent from the computer. Rust toolchain and Windows native build prerequisites must be verified before attempting a desktop build.
+- [Runtime environment evidence](research/runtime-architecture.md#windows-environment-evidence) records Git/Node and native tooling presence, bounded Rust/Cargo checks, and a local GitKraken 9.13.0 installation. Native compilation and matching-release reference access remain unverified.
 - No builds or application tests have run because application code has not been created.
 
 ## Decisions to settle

@@ -353,7 +353,7 @@ The user's always-record requirement is additional to the reference: application
 ## Open evidence and human decisions
 
 - A real 12.6.1 build with suitable entitlements is needed to establish final tabs, exact fields, menus, layouts, interaction states, accessibility, shortcuts and service/account errors. Documentation dates and release entries conflict in places.
-- Confirm full paid-feature union rather than selecting the reduced Community or on-premise set. All rows remain in scope until that acceptance decision is explicit.
+- The user's full-feature requirement retains paid-reference capabilities. Establish adequate reference entitlement access and record the feature union without substituting the reduced Community or on-premise set.
 - Define the scope of browser destinations: Desktop handoff parity, equivalent Code Review, and equivalent Insights analytics are different deliverables; none has been discarded.
 - Select self-hosted identity/deployment requirements, account/profile synchronization and organization structure. Decide whether vendor-like plan/seat/billing flows are functional product requirements or reference affordances to redesign.
 - Select AI defaults and provider test accounts, organization usage policy, supported agent versions and adapter/event contracts. No provider accounts were accessed or secrets requested by this research.

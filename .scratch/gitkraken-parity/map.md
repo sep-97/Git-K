@@ -21,13 +21,15 @@ Establish the reference coverage, acceptance approach, and architecture decision
 
 ## Decisions so far
 
-No decision tickets resolved yet. The standing user choices above were confirmed before charting this map.
+- [Audit desktop interface and local Git feature coverage](issues/01-core-parity-audit.md): 252 documented checkpoints establish the first coverage baseline; exact-build and visual evidence gaps remain open.
+- [Audit connected services, AI and agent feature coverage](issues/02-connected-parity-audit.md): 133 documented entries expose provider/service boundaries and release-specific browser handoffs; full connected scope is retained.
+- [Investigate Rust command execution and terminal architecture](issues/03-runtime-investigation.md): suitable mechanisms identified; exact application execution recording and interactive shell sessions need separate contracts, with prototype and build prerequisites still open.
 
 ## Not yet specified
 
 - The detailed delivery sequence depends on the completed coverage audit and architecture decisions.
-- Performance targets, test fixtures and platform-specific support requirements need evidence from the coverage and runtime investigations.
-- Cloud data ownership, deployment operations, service compatibility, and AI/agent provider arrangements need investigation before their dependent decisions can be made concrete.
+- Provider-specific failure and recovery cases may expose additional decisions once the service and execution contracts are chosen.
+- Long-lived action history and shared-data evolution may expose additional decisions after those contracts are defined.
 
 ## Out of scope
 

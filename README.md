@@ -8,6 +8,8 @@ Repository and engineering workflow configuration are initialized. The user conf
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.
 
+The [planning status](docs/planning-status.md) links the completed research, remaining decision frontier and next work.
+
 ## Workflow
 
 1. Audit reference features and resolve the map's architecture and acceptance questions, retaining all requested parity areas.
