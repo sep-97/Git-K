@@ -47,3 +47,5 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 - User review is still required before the production execution contract can be resolved. The first production slice remains gated.
 
 No automated test suite is added to this throwaway prototype. Verification consists of frontend/native builds and the actual UI walkthroughs recorded in the prototype notes.
+
+See [validation results](VALIDATION.md) for the Windows build and observed workflow evidence.

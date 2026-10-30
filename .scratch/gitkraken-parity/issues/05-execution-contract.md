@@ -17,4 +17,8 @@ Runtime investigation and terminal/interface requirements. A narrowly scoped pro
 
 ## Work in progress
 
-The user asked to move to the next level after confirming that no application existed. A runnable Tauri + Rust + React prototype is being built on `prototype/execution-history`, focused on repository inspection, real command activity, hidden-panel recording and disposable scenarios. This claim does not resolve the production execution contract or native support decision.
+The user asked to move to the next level after confirming that no application existed. A runnable Tauri + Rust + React prototype was built and launched on `prototype/execution-history`, focused on repository inspection, real command activity, hidden-panel recording and disposable scenarios. This claim does not resolve the production execution contract or native support decision.
+
+## Prototype evidence
+
+[Validation and bounded verdict](../../../apps/command-prototype/VALIDATION.md): the Windows native walkthrough passed; eight real Git reads remained recorded while the panel was collapsed, and an actual Git failure retained exit 128 and stderr. The throwaway source is captured on `prototype/execution-history`, outside main. User review and the remaining interactive, coordination, recovery and retention decisions are still required before resolution.

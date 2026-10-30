@@ -4,7 +4,7 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
-This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. Native build and UI walkthrough evidence is being collected; this is throwaway code for the open execution-contract decision, not the production Git manager.
+This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. The Windows executable built and passed the [native UI walkthrough](apps/command-prototype/VALIDATION.md), including recording while the activity panel was collapsed. This is throwaway code for the open execution-contract decision, not the production Git manager.
 
 The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Production slices remain gated; the full parity target is unchanged.
 
