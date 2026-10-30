@@ -1,0 +1,14 @@
+# Build products and installed dependencies
+node_modules/
+target/
+dist/
+
+# Local credentials and machine configuration
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.log
+.DS_Store
+Thumbs.db
