@@ -1,6 +1,6 @@
 # File staging prototype
 
-Status: implemented; review in progress
+Status: implemented and validated; user design review pending
 Assignee: /root
 Source branch: `prototype/file-staging`
 Base: `afc328113091f814d53c420ebfec2c4aaae3c6d2`
@@ -39,7 +39,7 @@ The native UI was driven against disposable Git repositories and checked indepen
 | Unresolved merge | Conflict notice appeared and both group actions were disabled. Conflict resolution remains a later feature. |
 | Collapsed history | All staging/unstaging checks ran with the panel collapsed. The counter advanced from 10 to 58 through the normal-repository checks, including the failure and retry; recording continued. |
 
-The final source also avoids treating a normal unborn-HEAD probe as a failed command and disables the path input while an operation is busy. Final rebuilt-binary smoke check and separate code reviews are pending.
+The final source also avoids treating a normal unborn-HEAD probe as a failed command and disables the path input while an operation is busy. The rebuilt executable opened the unborn repository with five successful commands and zero failures. Separate Standards and Spec reviews both passed with no material findings.
 
 ## Bounded verdict
 
