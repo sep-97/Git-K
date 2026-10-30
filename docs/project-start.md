@@ -1,6 +1,6 @@
 # Git manager project start
 
-Status: discovery started; application implementation has not started.
+Status: wayfinding map charted and research in progress; application implementation has not started.
 Recorded: October 30, 2026 (Asia/Tehran).
 
 ## Confirmed requirements
@@ -72,6 +72,6 @@ These are design proposals to validate during wayfinding:
 
 ## Workflow
 
-The invoked ask-matt router directs a project of this size to setup, then wayfinder, followed by a specification, dependency-linked tickets, and implementation. The user approved the setup draft, selected AGENTS.md, and confirmed local Markdown tickets and default triage labels. Configuration has been applied in this repository, which is initialized on main without a remote or initial commit. The feature inventory remains preliminary until the decision map and detailed audit resolve the unknowns.
+The invoked ask-matt router directs a project of this size to setup, then wayfinder, followed by a specification, dependency-linked tickets, and implementation. The user approved the setup draft, selected AGENTS.md, and confirmed local Markdown tickets and default triage labels. Configuration has been applied in this repository. The feature inventory remains preliminary until the decision map and detailed audit resolve the unknowns.
 
 The user confirmed the first decision round on October 30, 2026: pin 12.6.1, Windows first, self-hosted services first, and a collapsible panel with continuous recording. Continue through the [wayfinding map](../.scratch/gitkraken-parity/map.md). Recommendations in later research remain proposals until their decision tickets are resolved.

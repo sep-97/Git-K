@@ -5,7 +5,7 @@ Type: grilling
 Label: wayfinder:grilling
 Status: open
 Assignee: unassigned
-Blocked by: 01-core-parity-audit.md, 02-connected-parity-audit.md
+Blocked by: 01-core-parity-audit.md, 02-connected-parity-audit.md, 07-reference-access.md
 
 ## Question
 
@@ -13,4 +13,4 @@ Given the source audit, how will the user and project verify that every referenc
 
 ## Decision inputs
 
-Desktop and connected feature inventories, reference build/access observations, and known documentation gaps. Decide the reference edition/feature union, visual and behavioral comparison evidence, fixture coverage, platform acceptance order, accessibility and performance acceptance approach. Preserve full parity scope; explicit unavailable evidence must remain tracked.
+Desktop and connected feature inventories, reference build/access observations, known documentation gaps, and docs/parity-evidence-proposal.md. Decide the reference edition/feature union, visual and behavioral comparison evidence, fixture coverage, platform acceptance order, accessibility and performance acceptance approach. Preserve full parity scope; explicit unavailable evidence must remain tracked.
