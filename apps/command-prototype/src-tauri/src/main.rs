@@ -28,12 +28,21 @@ impl Runtime {
     fn git(&self, cwd: &Path, args: &[&str]) -> Result<String, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let executable = std::env::var_os("GIT_K_GIT").unwrap_or_else(|| "git".into());
-        let display = format!("git {}", args.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" "));
+        let mut effective_args = vec!["--no-pager"];
+        effective_args.extend_from_slice(args);
+        let args = effective_args.as_slice();
+        let display = format!("{} {}", quote(&executable.to_string_lossy()), args.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" "));
         self.event(id, "command", display);
         self.event(id, "context", cwd.display().to_string());
         let mut command = Command::new(executable);
         command.args(args).current_dir(cwd).env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0")
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy().to_ascii_uppercase();
+            if ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_LITERAL_PATHSPECS", "GIT_ICASE_PATHSPECS"].contains(&name.as_str()) || name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_") {
+                command.env_remove(key);
+            }
+        }
         #[cfg(windows)] {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
@@ -165,8 +174,8 @@ async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: St
             let bytes = fs::read(selected).map_err(|e| e.to_string())?;
             return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
-        let unstaged = runtime.git(&root, &["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
-        let staged = runtime.git(&root, &["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
+        let unstaged = runtime.git(&root, &["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
+        let staged = runtime.git(&root, &["--literal-pathspecs", "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--", &file])?;
         Ok(format!("{unstaged}{staged}"))
     }).await.map_err(|e| e.to_string())?
 }
@@ -218,6 +227,9 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
         fs::create_dir(root.join("src")).map_err(|e| e.to_string())?;
         runtime.event(0, "local", format!("Created disposable demo: {}", display_path(&root)));
         runtime.git(&root, &["init", "-b", "main"])?;
+        let root_text = display_path(&root);
+        runtime.git(&root, &["config", "--local", "core.worktree", &root_text])?;
+        runtime.git(&root, &["config", "--local", "core.fsmonitor", "false"])?;
         let empty_hooks = root.join(".git").join("prototype-empty-hooks");
         fs::create_dir_all(&empty_hooks).map_err(|e| e.to_string())?;
         let empty_hooks_text = display_path(&empty_hooks);
