@@ -4,13 +4,13 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
-Repository and engineering workflow configuration are initialized. The user confirmed the reference release, platform order, service deployment direction and command visibility. The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. Application code, dependencies, build scripts, and implementation tickets have not yet been created. There is no runnable application at this stage.
+Repository and engineering workflow configuration are initialized. The user confirmed the reference release, platform order, service deployment direction and command visibility. The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Application code, dependencies and build scripts have not yet been created; there is no runnable application at this stage.
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.
 
 The [planning status](docs/planning-status.md) links the completed research, remaining decision frontier and next work.
 
-The [implementation plan for review](docs/implementation-draft/README.md) contains the full specification draft, proposed work breakdown, coverage ownership and draft acceptance criteria. It awaits breakdown approval; the existing decision gates remain open.
+The [approved breakdown](docs/implementation-draft/breakdown.md) records the reviewed plan. Authoritative work state and acceptance criteria now live in the local implementation tracker; existing decision gates remain open.
 
 ## Workflow
 
