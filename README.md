@@ -1,4 +1,4 @@
-# Git manager
+# Git-K
 
 A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKraken Desktop feature parity, with visible execution history for graphical actions.
 

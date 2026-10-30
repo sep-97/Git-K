@@ -52,12 +52,12 @@ Read-only inspection used `Get-Command`, exact `Test-Path` probes, file version 
 | OS | Runtime reports Windows 10.0.26300, X64 | Windows x64 environment available; this does not establish the eventual minimum supported Windows release. |
 | Git | `C:\Program Files\Git\cmd\git.exe`; `git version 2.55.0.windows.5` | Available for command prototypes. System-versus-bundled Git remains a delivery decision. |
 | Node/npm | Node v24.11.0; npm 11.6.1 | Frontend tools available; no project dependencies have been installed. |
-| Rust/Cargo | Not on PATH; no `rustc.exe` or `cargo.exe` under `C:\Users\Sepehr\.cargo\bin`; no legacy Program Files Rust compiler at the probed path. `CARGO_HOME` and `RUSTUP_HOME` are unset. | Not ready to compile Rust in this session. These bounded probes do not prove no custom installation exists elsewhere. |
+| Rust/Cargo | Not on PATH; no `rustc.exe` or `cargo.exe` under `%USERPROFILE%\.cargo\bin`; no legacy Program Files Rust compiler at the probed path. `CARGO_HOME` and `RUSTUP_HOME` are unset. | Not ready to compile Rust in this session. These bounded probes do not prove no custom installation exists elsewhere. |
 | C++ toolchain | `vswhere` reports `C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools` for the VC x86/x64 component; MSVC directory 14.29.30133 exists | Toolchain files present; compatibility with the eventually pinned Rust/Tauri dependencies still needs a real build. `cl` was not on the ordinary process PATH. |
 | Windows SDK | Include directory 10.0.19041.0 exists | SDK files present; linker/header/library integration not build-tested. |
 | WebView2 | EdgeUpdate registry reports Microsoft Edge WebView2 Runtime 156.0.4314.50; corresponding application directory exists | Runtime present. Actual Tauri window startup still needs validation. |
 | Shells | Windows PowerShell; Git Bash at `C:\Program Files\Git\bin\bash.exe`; Codex-bundled `pwsh.exe` is discoverable | Avoid assuming the Codex-private PowerShell path is a generally installed shell that can be selected by end users. Standard `C:\Program Files\PowerShell\7\pwsh.exe` was absent. |
-| Reference client | `C:\Users\Sepehr\AppData\Local\gitkraken\gitkraken.exe` and app-9.13.0 executable both report product/file version 9.13.0 | An older local client exists. It cannot prove 12.6.1 visual/interaction parity; no update/install was performed. |
+| Reference client | `%LOCALAPPDATA%\gitkraken\gitkraken.exe` and app-9.13.0 executable both report product/file version 9.13.0 | An older local client exists. It cannot prove 12.6.1 visual/interaction parity; no update/install was performed. |
 
 Tauri documents Rust, C++ Build Tools and WebView2 as Windows development requirements. It also identifies platform-specific macOS and Linux prerequisites. These observations establish partial prerequisite presence, not a successful build. [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
