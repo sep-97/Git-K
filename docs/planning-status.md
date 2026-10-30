@@ -58,6 +58,8 @@ flowchart TD
 
 ## Next work
 
+An [implementation plan draft](implementation-draft/README.md) now maps the researched requirements and remaining discovery obligations to 135 proposed work items. The user approved complete-workflow testing. Ticket granularity and blocking edges await review before publication to the local tracker; open map decisions remain open. Nine work items are explicitly gated envelopes rather than implementation-ready slices.
+
 Work the execution-contract prototype with real temporary repositories and the user's review. Preserve truth about command arguments/output, application versus shell origin, hidden-panel recording, failures, prompts, cancellation and shared-worktree state. The [evidence proposal](parity-evidence-proposal.md) remains an input for the later acceptance decision.
 
 After the map's remaining decisions are resolved, continue through specification, dependency-linked implementation tickets and production implementation. Full parity remains the destination; ordering work does not reduce it.

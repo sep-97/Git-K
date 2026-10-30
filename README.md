@@ -10,6 +10,8 @@ The [project baseline](docs/project-start.md) records confirmed requirements, ci
 
 The [planning status](docs/planning-status.md) links the completed research, remaining decision frontier and next work.
 
+The [implementation plan for review](docs/implementation-draft/README.md) contains the full specification draft, proposed work breakdown, coverage ownership and draft acceptance criteria. It awaits breakdown approval; the existing decision gates remain open.
+
 ## Workflow
 
 1. Audit reference features and resolve the map's architecture and acceptance questions, retaining all requested parity areas.
