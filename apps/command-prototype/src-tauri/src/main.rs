@@ -237,30 +237,50 @@ async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Op
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, summary: String, description: String) -> Result<CommitOutcome, String> {
+async fn latest_message(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String) -> Result<String, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
+        let root = commit_target(&runtime, &path, &expected_head, &expected_branch)?;
+        if expected_head.is_empty() { return Err("There is no commit to amend on this branch.".into()); }
+        runtime.event(0, "local", format!("Read amend message for {expected_head}. No repository mutation."));
+        runtime.git(&root, &["show", "--no-patch", "--format=format:%B", &expected_head, "--"])
+    }).await.map_err(|e| e.to_string())?
+}
+fn commit_target(runtime: &Runtime, path: &str, expected_head: &str, expected_branch: &str) -> Result<PathBuf, String> {
+    let requested = repository(path)?;
+    let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
+    let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
+    let branch = runtime.git(&root, &["branch", "--show-current"])?;
+    let branch = if branch.trim().is_empty() { "Detached HEAD" } else { branch.trim() };
+    if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this draft was loaded. Cancel amend if active, then review the refreshed repository before committing.".into()); }
+    for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
+        let marker_path = runtime.git(&root, &["rev-parse", "--git-path", marker])?;
+        if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before committing.".into()); }
+    }
+    if changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before committing.".into()); }
+    Ok(root)
+}
+#[tauri::command]
+async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, summary: String, description: String, amend: bool) -> Result<CommitOutcome, String> {
     let runtime = runtime.inner().clone();
     let journal = runtime.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        runtime.event(0, "local", "Requested commit of staged changes.");
+        runtime.event(0, "local", if amend { "Requested update of the latest commit, including any staged changes." } else { "Requested commit of staged changes." });
         let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
         let summary = summary.trim();
         if summary.is_empty() || summary.contains(['\n', '\r', '\0']) || description.contains('\0') { return Err("Enter a single-line commit summary. Messages cannot contain NUL characters.".into()); }
-        let requested = repository(&path)?;
-        let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
-        let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
-        let branch = runtime.git(&root, &["branch", "--show-current"])?;
-        let branch = if branch.trim().is_empty() { "Detached HEAD" } else { branch.trim() };
-        if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this view was loaded. Review the refreshed repository before committing.".into()); }
-        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
-            let marker_path = runtime.git(&root, &["rev-parse", "--git-path", marker])?;
-            if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before committing.".into()); }
+        let root = commit_target(&runtime, &path, &expected_head, &expected_branch)?;
+        if amend && expected_head.is_empty() { return Err("There is no commit to amend on this branch.".into()); }
+        if !amend {
+            let staged = runtime.git(&root, &["diff", "--cached", "--name-only", "-z", "--"])?;
+            if staged.is_empty() { return Err("No staged changes to commit. Stage a file first.".into()); }
         }
-        if changes(&runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before committing.".into()); }
-        let staged = runtime.git(&root, &["diff", "--cached", "--name-only", "-z", "--"])?;
-        if staged.is_empty() { return Err("No staged changes to commit. Stage a file first.".into()); }
         let message = if description.trim().is_empty() { summary.into() } else { format!("{summary}\n\n{}", description.trim()) };
-        let output = runtime.git(&root, &["commit", "--cleanup=verbatim", "--message", &message])?;
-        runtime.event(0, "local", "Git created the commit. Refreshing repository state.");
+        let mut args = vec!["commit", "--cleanup=verbatim", "--message", &message];
+        if amend { args.push("--amend"); }
+        let output = runtime.git(&root, &args)?;
+        runtime.event(0, "local", if amend { "Git amended the commit. Refreshing repository state." } else { "Git created the commit. Refreshing repository state." });
         // Once Git succeeds, a later read failure must not invite a duplicate commit.
         Ok(match snapshot(runtime.clone(), display_path(&root)) {
             Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
@@ -353,6 +373,6 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 }
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, create_commit, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }

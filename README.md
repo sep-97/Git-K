@@ -10,6 +10,8 @@ The `prototype/file-staging` extension adds separate Staged/Unstaged lists, side
 
 The `prototype/commit-workflow` extension adds a summary/description composer and real commits from staged changes. Its [scope and validation](apps/command-prototype/COMMITS.md) cover first commits, partially staged contents, hook/identity/signing failures, changed branches and successful commits followed by failed reads.
 
+The `prototype/amend-workflow` extension adds latest-message editing, staged amendments and cancellation that restores the new-commit draft. Its [scope and validation](apps/command-prototype/AMEND.md) cover message-only and merge amendments, literal messages, preserved working files, hook rejection, stale targets and post-success refresh failures.
+
 The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Production slices remain gated; the full parity target is unchanged.
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.
