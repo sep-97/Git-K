@@ -12,6 +12,8 @@ The `prototype/commit-workflow` extension adds a summary/description composer an
 
 The `prototype/amend-workflow` extension adds latest-message editing, staged amendments and cancellation that restores the new-commit draft. Its [scope and validation](apps/command-prototype/AMEND.md) cover message-only and merge amendments, literal messages, preserved working files, hook rejection, stale targets and post-success refresh failures.
 
+The `prototype/branch-workflow` extension adds local branch creation at HEAD or a selected commit, optional immediate checkout and branch-list checkout controls. Its [scope and validation](apps/command-prototype/BRANCHES.md) cover literal names, dirty/ignored file protection, same-name tags, linked-worktree restrictions, stale source rejection and checkout-hook/refresh failures.
+
 The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Production slices remain gated; the full parity target is unchanged.
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.

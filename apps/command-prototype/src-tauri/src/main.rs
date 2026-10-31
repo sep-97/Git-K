@@ -142,7 +142,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     let path = PathBuf::from(root.trim());
     let branch = runtime.git(&path, &["branch", "--show-current"])?;
     let files = changes(&runtime, &path)?;
-    let branches = runtime.git(&path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+    let branches = runtime.git(&path, &["for-each-ref", "--format=%(refname)", "refs/heads"])?;
     let head = runtime.git(&path, &["rev-parse", "--revs-only", "HEAD"])?;
     let commits = if !head.trim().is_empty() {
         let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D"])?;
@@ -152,7 +152,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
             Some(Commit { sha: fields[0].into(), parents: fields[1].split_whitespace().map(String::from).collect(), subject: fields[2].into(), author: fields[3].into(), age: fields[4].into(), refs: fields[5].into() })
         }).collect()
     } else { Vec::new() };
-    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches: branches.lines().map(String::from).collect() })
+    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches: branches.lines().filter_map(|name| name.strip_prefix("refs/heads/").map(String::from)).collect() })
 }
 #[tauri::command]
 fn initial_path() -> String {
@@ -253,12 +253,12 @@ fn commit_target(runtime: &Runtime, path: &str, expected_head: &str, expected_br
     let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
     let branch = runtime.git(&root, &["branch", "--show-current"])?;
     let branch = if branch.trim().is_empty() { "Detached HEAD" } else { branch.trim() };
-    if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this draft was loaded. Cancel amend if active, then review the refreshed repository before committing.".into()); }
+    if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this view was loaded. Review the refreshed repository and reopen any amend or branch dialog before trying again.".into()); }
     for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
         let marker_path = runtime.git(&root, &["rev-parse", "--git-path", marker])?;
-        if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before committing.".into()); }
+        if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before changing branches or committing.".into()); }
     }
-    if changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before committing.".into()); }
+    if changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before changing branches or committing.".into()); }
     Ok(root)
 }
 #[tauri::command]
@@ -288,6 +288,43 @@ async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expecte
         })
     }).await.map_err(|e| e.to_string()).and_then(|result| result);
     if let Err(error) = &result { journal.event(0, "local", format!("Commit did not complete: {error}")); }
+    result
+}
+#[tauri::command]
+async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, name: String, start_point: Option<String>, checkout: bool) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    let journal = runtime.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        runtime.event(0, "local", format!("Requested {} branch: {name}", if start_point.is_some() { "creation of" } else { "checkout of" }));
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
+        let root = commit_target(&runtime, &path, &expected_head, &expected_branch)?;
+        if name.is_empty() || name.starts_with('-') || name.contains(['\0', '\n', '\r']) { return Err("Enter a literal local branch name that does not begin with a dash.".into()); }
+        // --branch can expand @{-n}; accept only the exact literal spelling supplied.
+        let validated = runtime.git(&root, &["check-ref-format", "--branch", &name])?;
+        if validated.trim_end_matches(['\n', '\r']) != name { return Err("Use a literal branch name, not a previous-checkout expression.".into()); }
+        let output = if let Some(start) = start_point {
+            if ![40, 64].contains(&start.len()) || !start.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Select an existing commit as the branch starting point.".into()); }
+            runtime.git(&root, &["cat-file", "-e", &format!("{start}^{{commit}}")])?;
+            if checkout {
+                // One Git command creates and switches; no separate partially completed create step.
+                runtime.git(&root, &["switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules", "--no-track", "-c", &name, "--", &start])?
+            } else {
+                runtime.git(&root, &["branch", "--no-track", "--", &name, &start])?
+            }
+        } else {
+            if !checkout { return Err("Choose a branch action.".into()); }
+            let full_ref = format!("refs/heads/{name}");
+            runtime.git(&root, &["show-ref", "--verify", &full_ref])?;
+            if name == expected_branch { return Err("This branch is already checked out.".into()); }
+            runtime.git(&root, &["switch", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules", "--", &name])?
+        };
+        runtime.event(0, "local", "Git completed the branch action. Refreshing repository state.");
+        Ok(match snapshot(runtime.clone(), display_path(&root)) {
+            Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
+            Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
+        })
+    }).await.map_err(|e| e.to_string()).and_then(|result| result);
+    if let Err(error) = &result { journal.event(0, "local", format!("Branch action reported an error; repository state may have changed: {error}")); }
     result
 }
 #[tauri::command]
@@ -373,6 +410,6 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 }
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }
