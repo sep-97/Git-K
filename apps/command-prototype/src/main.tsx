@@ -8,6 +8,7 @@ type Commit = { sha: string; parents: string[]; subject: string; author: string;
 type FileChange = { path: string; state: string; previous: string | null };
 type Side = 'staged' | 'unstaged';
 type Snapshot = { path: string; branch: string; head: string; files: FileChange[]; commits: Commit[]; branches: string[] };
+type CommitOutcome = { output: string; snapshot: Snapshot | null; refresh_error: string | null };
 type Event = { seq: number; operation: number; timestamp: number; kind: string; text: string };
 type Operation = { id: number; command: string; cwd: string; output: string; status: string; end: string; timestamp: number };
 
@@ -89,6 +90,9 @@ function App() {
   const [watching, setWatching] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [tab, setTab] = useState<'history' | 'changes'>('history');
+  const [summary, setSummary] = useState('');
+  const [description, setDescription] = useState('');
+  const draftPath = useRef('');
   const cursor = useRef(0);
   const selectionEpoch = useRef(0);
   useEffect(() => {
@@ -106,7 +110,11 @@ function App() {
   async function load(value: string) {
     if (!value.trim()) return;
     setBusy('Reading repository…'); setError(''); setNotice(''); selectionEpoch.current++;
-    try { const data = await invoke<Snapshot>('open_repository', { path: value }); setRepo(data); setPath(data.path); setSelected(''); setScope('Real output from the selected repository'); setTitle('Repository opened'); setDetail('Select a commit or a changed file. Every Git command is recorded in the activity panel below.'); }
+    try {
+      const data = await invoke<Snapshot>('open_repository', { path: value });
+      if (draftPath.current !== data.path) { setSummary(''); setDescription(''); draftPath.current = data.path; }
+      setRepo(data); setPath(data.path); setSelected(''); setScope('Real output from the selected repository'); setTitle('Repository opened'); setDetail('Select a commit or a changed file. Every Git command is recorded in the activity panel below.');
+    }
     catch (e) { setError(String(e)); }
     finally { setBusy(''); }
   }
@@ -147,6 +155,22 @@ function App() {
       catch (refreshError) { setRepo(null); setError(`${String(e)} · Could not refresh repository: ${String(refreshError)}`); }
     } finally { setBusy(''); }
   }
+  async function commitStaged() {
+    if (!repo || busy || !summary.trim()) return;
+    setBusy('Committing staged changes…'); setError(''); setNotice(''); selectionEpoch.current++;
+    setSelected(''); setTitle('Commit in progress'); setScope('Staged changes → new commit'); setDetail('Waiting for Git. Configured hooks and signing may run.');
+    try {
+      const outcome = await invoke<CommitOutcome>('create_commit', { path: repo.path, expectedHead: repo.head, expectedBranch: repo.branch, summary, description });
+      setSummary(''); setDescription(''); setRepo(outcome.snapshot); setTitle('Commit created'); setScope('Actual output from git commit'); setDetail(outcome.output || 'Git created the commit.');
+      setNotice('Commit created from staged changes.');
+      if (outcome.refresh_error) setError(`The commit succeeded, but refreshing failed: ${outcome.refresh_error}. Reopen the repository to inspect it.`);
+      else setTab('history');
+    } catch (e) {
+      setError(String(e)); setTitle('Commit did not complete'); setDetail('Review the recorded Git output. Your commit message is retained.');
+      try { setRepo(await invoke<Snapshot>('open_repository', { path: repo.path })); }
+      catch (refreshError) { setRepo(null); setError(`${String(e)} · Could not refresh repository: ${String(refreshError)}`); }
+    } finally { setBusy(''); }
+  }
   async function watch() {
     if (!repo) return;
     if (watching) { await invoke('stop_watch'); return; }
@@ -180,20 +204,22 @@ function App() {
   const repoName = repo?.path.split(/[\\/]/).filter(Boolean).at(-1) || 'No repository';
   const failed = operations.filter(op => op.status === 'failed').length;
   const active = operations.filter(op => op.status === 'running').length;
+  const stagedCount = repo?.files.filter(file => !isConflict(file) && file.state !== '??' && file.state[0] !== ' ').length || 0;
+  const hasConflicts = repo?.files.some(isConflict) || false;
   return <div className="app">
     <header className="titlebar"><div className="brand"><span className="brand-icon"><Icon name="branch" size={23}/></span>Git-K<span className="prototype-badge">EXECUTION PROTOTYPE</span></div><div className="window-note">Tauri <span>·</span> Rust <span>·</span> React</div></header>
     <div className="repo-tab"><Icon name="folder" size={16}/><span>{repoName}</span><span className="tab-dot"/><span className="tab-caption">Local repository</span></div>
     <div className="toolbar"><div className="path-control"><Icon name="folder"/><input aria-label="Repository folder" value={path} disabled={!!busy} onChange={e => setPath(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !busy) void load(path); }}/><button onClick={() => void load(path)} disabled={!!busy} className="path-open">Open</button></div><button onClick={() => void browse()} disabled={!!busy}><Icon name="folder"/>Browse</button><div className="toolbar-divider"/><button onClick={() => repo && void load(repo.path)} disabled={!repo || !!busy}><Icon name="refresh"/>Refresh</button><button onClick={() => void demo()} disabled={!!busy} className="accent-button">Create demo workspace</button></div>
-    <div className="question"><span className="question-dot"/><span><strong>Stage with a clear view.</strong> Move files between working changes and the index. Every Git command stays recorded.</span><span className="read-only-tag">Staging changes the index · working files stay in place</span></div>
+    <div className="question"><span className="question-dot"/><span><strong>From changes to commits.</strong> Stage files, write a message and see the actual Git commands and results.</span><span className="read-only-tag">Commits include staged changes only</span></div>
     {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss message"><Icon name="close" size={14}/></button></div>}
     {notice && <div className="notice-banner" role="status"><Icon name="check" size={15}/><span>{notice}</span></div>}
     <div className="workspace">
-      <aside className="sidebar"><div className="sidebar-repo"><div className="repo-avatar">{repoName.slice(0, 1).toUpperCase()}</div><div><strong>{repoName}</strong><small>{repo ? 'Repository connected' : 'Open a folder to begin'}</small></div></div><div className="section-label">WORKSPACE</div><button className={`side-action ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}><Icon name="history"/>Commit history<span>{repo?.commits.length || 0}</span></button><button className={`side-action ${tab === 'changes' ? 'active' : ''}`} onClick={() => setTab('changes')}><Icon name="file"/>Working changes<span>{repo?.files.length || 0}</span></button><div className="section-label">LOCAL BRANCHES <span>{repo?.branches.length || 0}</span></div>{repo?.branches.map(branch => <div className={`branch-item ${branch === repo.branch ? 'current' : ''}`} key={branch}><Icon name="branch" size={15}/><span>{branch}</span>{branch === repo.branch && <span className="current-dot"/>}</div>)}<div className="sidebar-bottom"><div className="section-label">THIS BUILD</div><p>Real repository data.<br/>Stage and unstage files.<br/>In-memory action history.</p><small>Prototype only. Commits, remote actions and interactive shells are not implemented.</small></div></aside>
-      <main className="main-panel"><div className="panel-heading"><div><h1>{tab === 'history' ? 'Commit history' : 'Working changes'}</h1><span>{repo?.branch ? <><Icon name="branch" size={13}/>{repo.branch}</> : 'Choose a repository'}</span></div><div className="count-pill">{tab === 'history' ? `${repo?.commits.length || 0} loaded` : `${repo?.files.length || 0} changes`}</div></div>{busy && <div className="loading-line">{busy}</div>}{repo ? tab === 'history' ? <Graph commits={repo.commits} selected={selected} onSelect={commit => void inspectCommit(commit)}/> : <Changes files={repo.files} selected={selected} busy={!!busy} onSelect={(file, side) => void inspectFile(file, side)} onChange={(file, stage) => void changeIndex(file, stage)}/> : <div className="empty"><div className="empty-icon"><Icon name="branch" size={34}/></div><h2>A clear view of your Git work</h2><p>Open an existing repository, or create a disposable demo to explore branches, changes and recorded commands.</p><button className="accent-button" onClick={() => void demo()} disabled={!!busy}>Create demo workspace</button></div>}</main>
+      <aside className="sidebar"><div className="sidebar-repo"><div className="repo-avatar">{repoName.slice(0, 1).toUpperCase()}</div><div><strong>{repoName}</strong><small>{repo ? 'Repository connected' : 'Open a folder to begin'}</small></div></div><div className="section-label">WORKSPACE</div><button className={`side-action ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}><Icon name="history"/>Commit history<span>{repo?.commits.length || 0}</span></button><button className={`side-action ${tab === 'changes' ? 'active' : ''}`} onClick={() => setTab('changes')}><Icon name="file"/>Working changes<span>{repo?.files.length || 0}</span></button><div className="section-label">LOCAL BRANCHES <span>{repo?.branches.length || 0}</span></div>{repo?.branches.map(branch => <div className={`branch-item ${branch === repo.branch ? 'current' : ''}`} key={branch}><Icon name="branch" size={15}/><span>{branch}</span>{branch === repo.branch && <span className="current-dot"/>}</div>)}<div className="sidebar-bottom"><div className="section-label">THIS BUILD</div><p>Real repository data.<br/>Stage, unstage and commit.<br/>In-memory action history.</p><small>Prototype only. Remote actions and interactive shells are not implemented.</small></div></aside>
+      <main className={`main-panel ${repo && tab === 'changes' ? 'changes-mode' : ''}`}><div className="panel-heading"><div><h1>{tab === 'history' ? 'Commit history' : 'Working changes'}</h1><span>{repo?.branch ? <><Icon name="branch" size={13}/>{repo.branch}</> : 'Choose a repository'}</span></div><div className="count-pill">{tab === 'history' ? `${repo?.commits.length || 0} loaded` : `${repo?.files.length || 0} changes`}</div></div>{busy && <div className="loading-line">{busy}</div>}{repo ? tab === 'history' ? <Graph commits={repo.commits} selected={selected} onSelect={commit => void inspectCommit(commit)}/> : <><Changes files={repo.files} selected={selected} busy={!!busy} onSelect={(file, side) => void inspectFile(file, side)} onChange={(file, stage) => void changeIndex(file, stage)}/><form className="commit-composer" onSubmit={event => { event.preventDefault(); void commitStaged(); }} aria-label="Create commit"><div className="composer-heading"><strong>New commit</strong><span>{stagedCount} staged file{stagedCount === 1 ? '' : 's'}</span></div><input aria-label="Commit summary" placeholder="Commit summary (required)" value={summary} disabled={!!busy} onChange={event => setSummary(event.target.value)}/><textarea aria-label="Commit description" placeholder="Description (optional)" rows={2} value={description} disabled={!!busy} onChange={event => setDescription(event.target.value)}/><div className="composer-actions"><small>{hasConflicts ? 'Resolve conflicts before committing.' : stagedCount ? 'Uses configured identity, hooks and signing.' : 'Stage a file to create a commit.'}</small><button className="accent-button" type="submit" disabled={!!busy || !stagedCount || hasConflicts || !summary.trim()}><Icon name="check" size={14}/>Commit staged</button></div></form></> : <div className="empty"><div className="empty-icon"><Icon name="branch" size={34}/></div><h2>A clear view of your Git work</h2><p>Open an existing repository, or create a disposable demo to explore branches, changes and recorded commands.</p><button className="accent-button" onClick={() => void demo()} disabled={!!busy}>Create demo workspace</button></div>}</main>
       <section className="detail-panel"><div className="detail-heading"><span className="eyebrow">INSPECTOR</span><h2 title={title}>{title}</h2><small>{scope}</small></div><Diff text={detail}/></section>
     </div>
     <section className={`activity ${panel ? 'expanded' : 'collapsed'}`}><div className="activity-heading"><button className="activity-toggle" onClick={togglePanel}><Icon name="terminal" size={17}/><strong>Action history</strong><span className="recording-dot"/><span>{operations.length} Git commands recorded</span><span className="collapse-glyph">{panel ? '⌄' : '⌃'}</span></button><div className="activity-tools"><button onClick={() => void watch()} disabled={!repo || !!busy} className={watching ? 'watching' : ''}><Icon name={watching ? 'stop' : 'play'} size={13}/>{watching ? 'Stop remaining checks' : 'Run 8 live checks'}</button><button onClick={() => void fail()} disabled={!repo || !!busy}>Show a real failure</button></div></div>{panel && <div className="activity-body"><div className="operation-list">{operations.slice(0, 150).map(operation => <div className={`operation ${operation.status}`} key={operation.id}><button className="operation-heading" onClick={() => setExpanded(expanded === operation.id ? null : operation.id)}><span className="operation-symbol">{operation.status === 'completed' ? '✓' : operation.status === 'failed' ? '×' : '◌'}</span><time>{new Date(operation.timestamp).toLocaleTimeString([], { hour12: false })}</time><code>{operation.command}</code><span className="operation-result">{operation.end || 'running'}</span><Icon name="arrow" size={12}/></button>{expanded === operation.id && <div className="operation-output"><div className="cwd">{operation.cwd}</div><pre>{operation.output || '(No output)'}</pre></div>}</div>)}{!operations.length && <div className="activity-empty">Commands will appear here when you open a repository.</div>}{operations.length > 150 && <div className="preview-limit">Showing the latest 150 commands in the panel. This session retains all recorded events in memory.</div>}</div><div className="activity-context"><span className="eyebrow">LOCAL ACTIVITY</span>{local.map(event => <p key={event.seq}>{event.text}</p>)}<div className="session-stats"><span>{active} running</span><span>{failed} failed</span><span>{events.length} events</span></div></div></div>}</section>
-    <footer><div><span className="footer-dot"/>{busy || (watching ? 'Live repository checks are running' : 'Ready')}<span className="footer-separator">/</span><Icon name="branch" size={12}/>{repo?.branch || 'No repository'}</div><div>Local session only<span className="footer-separator">/</span>File staging prototype</div></footer>
+    <footer><div><span className="footer-dot"/>{busy || (watching ? 'Live repository checks are running' : 'Ready')}<span className="footer-separator">/</span><Icon name="branch" size={12}/>{repo?.branch || 'No repository'}</div><div>Local session only<span className="footer-separator">/</span>Commit workflow prototype</div></footer>
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);

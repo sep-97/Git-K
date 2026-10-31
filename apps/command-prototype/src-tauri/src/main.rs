@@ -88,7 +88,10 @@ impl Runtime {
             Err(error) => { self.event(id, "failed", error.clone()); return Err(error); }
         };
         self.event(id, if result.success() { "completed" } else { "failed" }, format!("exit {} · {} ms", result.code().map(|v| v.to_string()).unwrap_or_else(|| "interrupted".into()), now() - started));
-        if !result.success() { return Err(String::from_utf8_lossy(&err).trim().to_string()); }
+        if !result.success() {
+            let error = String::from_utf8_lossy(&err).trim().to_string();
+            return Err(if error.is_empty() { format!("Git exited with {}. Inspect the recorded output in Action history.", result.code().map(|v| v.to_string()).unwrap_or_else(|| "an interruption".into())) } else { error });
+        }
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
 }
@@ -112,6 +115,8 @@ struct FileChange { path: String, state: String, previous: Option<String> }
 struct Commit { sha: String, parents: Vec<String>, subject: String, author: String, age: String, refs: String }
 #[derive(Serialize)]
 struct Snapshot { path: String, branch: String, head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<String> }
+#[derive(Serialize)]
+struct CommitOutcome { output: String, snapshot: Option<Snapshot>, refresh_error: Option<String> }
 fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
     let status = runtime.git(path, &["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
     let mut entries = status.split('\0').filter(|s| !s.is_empty());
@@ -198,7 +203,7 @@ async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: St
 async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Option<String>, stage: bool) -> Result<Snapshot, String> {
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = runtime.mutation.try_lock().map_err(|_| "Another index change is still running.".to_string())?;
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
         let requested = repository(&path)?;
         let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
         let files = changes(&runtime, &root)?;
@@ -230,6 +235,40 @@ async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Op
         }
         snapshot(runtime.clone(), display_path(&root))
     }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, summary: String, description: String) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    let journal = runtime.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        runtime.event(0, "local", "Requested commit of staged changes.");
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
+        let summary = summary.trim();
+        if summary.is_empty() || summary.contains(['\n', '\r', '\0']) || description.contains('\0') { return Err("Enter a single-line commit summary. Messages cannot contain NUL characters.".into()); }
+        let requested = repository(&path)?;
+        let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
+        let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
+        let branch = runtime.git(&root, &["branch", "--show-current"])?;
+        let branch = if branch.trim().is_empty() { "Detached HEAD" } else { branch.trim() };
+        if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this view was loaded. Review the refreshed repository before committing.".into()); }
+        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
+            let marker_path = runtime.git(&root, &["rev-parse", "--git-path", marker])?;
+            if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before committing.".into()); }
+        }
+        if changes(&runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before committing.".into()); }
+        let staged = runtime.git(&root, &["diff", "--cached", "--name-only", "-z", "--"])?;
+        if staged.is_empty() { return Err("No staged changes to commit. Stage a file first.".into()); }
+        let message = if description.trim().is_empty() { summary.into() } else { format!("{summary}\n\n{}", description.trim()) };
+        let output = runtime.git(&root, &["commit", "--cleanup=verbatim", "--message", &message])?;
+        runtime.event(0, "local", "Git created the commit. Refreshing repository state.");
+        // Once Git succeeds, a later read failure must not invite a duplicate commit.
+        Ok(match snapshot(runtime.clone(), display_path(&root)) {
+            Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
+            Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
+        })
+    }).await.map_err(|e| e.to_string()).and_then(|result| result);
+    if let Err(error) = &result { journal.event(0, "local", format!("Commit did not complete: {error}")); }
+    result
 }
 #[tauri::command]
 async fn inspect_commit(runtime: tauri::State<'_, Runtime>, path: String, sha: String) -> Result<String, String> {
@@ -282,6 +321,9 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
         let root_text = display_path(&root);
         runtime.git(&root, &["config", "--local", "core.worktree", &root_text])?;
         runtime.git(&root, &["config", "--local", "core.fsmonitor", "false"])?;
+        runtime.git(&root, &["config", "--local", "user.name", "Git-K Demo"])?;
+        runtime.git(&root, &["config", "--local", "user.email", "demo@git-k.local"])?;
+        runtime.git(&root, &["config", "--local", "commit.gpgsign", "false"])?;
         let empty_hooks = root.join(".git").join("prototype-empty-hooks");
         fs::create_dir_all(&empty_hooks).map_err(|e| e.to_string())?;
         let empty_hooks_text = display_path(&empty_hooks);
@@ -311,6 +353,6 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 }
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, create_commit, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }

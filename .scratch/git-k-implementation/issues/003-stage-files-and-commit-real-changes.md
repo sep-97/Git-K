@@ -49,7 +49,7 @@ A source checkpoint can contain multiple subcases. The primary owner keeps compl
 
 [Core audit](../../../docs/research/core-parity.md), [connected audit](../../../docs/research/connected-parity.md), [runtime investigation](../../../docs/research/runtime-architecture.md), [coverage](../coverage.md), and [specification](../spec.md).
 
-Prototype context: `prototype/file-staging` extends the native execution harness with whole-file stage/unstage workflows. [Scope and findings](../../../apps/command-prototype/STAGING.md) inform the execution contract. Commit creation and remaining production criteria are not implemented; this issue remains blocked.
+Prototype context: `prototype/file-staging` extends the native execution harness with whole-file stage/unstage workflows. [Scope and findings](../../../apps/command-prototype/STAGING.md) inform the execution contract. `prototype/commit-workflow` adds real commits with entered messages and [native workflow findings](../../../apps/command-prototype/COMMITS.md), including first commits and hook/identity/signing failure handling. These are throwaway design experiments. Remaining production criteria and decision gates are unresolved; this issue remains blocked with acceptance boxes unchecked.
 
 ## Publication
 

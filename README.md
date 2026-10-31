@@ -8,6 +8,8 @@ This branch contains a [Tauri + Rust + React execution prototype](apps/command-p
 
 The `prototype/file-staging` extension adds separate Staged/Unstaged lists, side-specific diffs, and real whole-file stage/unstage actions. Its [scope and validation](apps/command-prototype/STAGING.md) cover literal filenames, rename pairs, unborn HEAD, working-file preservation and genuine index-lock failure recovery.
 
+The `prototype/commit-workflow` extension adds a summary/description composer and real commits from staged changes. Its [scope and validation](apps/command-prototype/COMMITS.md) cover first commits, partially staged contents, hook/identity/signing failures, changed branches and successful commits followed by failed reads.
+
 The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Production slices remain gated; the full parity target is unchanged.
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.
