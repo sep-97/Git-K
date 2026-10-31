@@ -1,6 +1,6 @@
 # Commit workflow prototype
 
-Status: implemented and validated; independent review pending
+Status: implemented and validated; user design review pending
 Assignee: /root
 Source branch: `prototype/commit-workflow`
 Base: `c914639`
@@ -42,6 +42,10 @@ Observed on Windows x64, October 31, 2026. Frontend typecheck/Vite build and nat
 | Hidden history | Checks ran with the panel collapsed; the counter advanced from 6 to 165 actual commands. Reopening exposes the signing failure's actual commit command and exit 128. The session reports four failed operations, including hook/identity/signing failures and the deliberate post-commit read failure. |
 
 No automated suite is added to this throwaway harness.
+
+Separate Standards and Spec reviews of source checkpoint `7564b2e` both passed with zero findings. The final executable was rebuilt after adding local records for preflight refusals. Its native demo confirmed that the refusal is retained in Action history, followed by a successful commit on the refreshed main branch. History advanced from four to five commits, the new commit contained the staged theme, and `NOTES.md` remained untracked. The final session recorded 64 real Git commands with zero failed Git operations; the rejected preflight was recorded as local activity rather than a fabricated failed command.
+
+Windows executable: `Git-K-commits.exe`, built from `7564b2e` on October 31, 2026. SHA-256: `FEB44CBC0B29CC0AFF0C02131A73453737F7E81E77F84FFD41E195B9FAAE87EA`.
 
 ## Bounded verdict
 
