@@ -114,7 +114,9 @@ struct FileChange { path: String, state: String, previous: Option<String> }
 #[derive(Serialize)]
 struct Commit { sha: String, parents: Vec<String>, subject: String, author: String, age: String, refs: String }
 #[derive(Serialize)]
-struct Snapshot { path: String, branch: String, head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<String> }
+struct LocalRef { name: String, oid: String, kind: String }
+#[derive(Serialize)]
+struct Snapshot { path: String, branch: String, head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<LocalRef>, tags: Vec<LocalRef> }
 #[derive(Serialize)]
 struct CommitOutcome { output: String, snapshot: Option<Snapshot>, refresh_error: Option<String> }
 fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
@@ -135,6 +137,14 @@ fn pending(file: &FileChange, stage: bool) -> bool {
     if stage { file.state == "??" || file.state.as_bytes()[1] != b' ' }
     else { file.state != "??" && file.state.as_bytes()[0] != b' ' }
 }
+fn local_refs(runtime: &Runtime, path: &Path, prefix: &str) -> Result<Vec<LocalRef>, String> {
+    let refs = runtime.git(path, &["for-each-ref", "--format=%(refname)%1f%(objectname)%1f%(objecttype)", prefix])?;
+    Ok(refs.lines().filter_map(|line| {
+        let fields: Vec<_> = line.split('\x1f').collect();
+        if fields.len() != 3 { return None; }
+        Some(LocalRef { name: fields[0].strip_prefix(prefix)?.trim_start_matches('/').into(), oid: fields[1].into(), kind: fields[2].into() })
+    }).collect())
+}
 fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     runtime.event(0, "local", format!("Open / refresh repository: {input}"));
     let requested = repository(&input)?;
@@ -142,7 +152,8 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     let path = PathBuf::from(root.trim());
     let branch = runtime.git(&path, &["branch", "--show-current"])?;
     let files = changes(&runtime, &path)?;
-    let branches = runtime.git(&path, &["for-each-ref", "--format=%(refname)", "refs/heads"])?;
+    let branches = local_refs(&runtime, &path, "refs/heads/")?;
+    let tags = local_refs(&runtime, &path, "refs/tags/")?;
     let head = runtime.git(&path, &["rev-parse", "--revs-only", "HEAD"])?;
     let commits = if !head.trim().is_empty() {
         let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D"])?;
@@ -152,7 +163,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
             Some(Commit { sha: fields[0].into(), parents: fields[1].split_whitespace().map(String::from).collect(), subject: fields[2].into(), author: fields[3].into(), age: fields[4].into(), refs: fields[5].into() })
         }).collect()
     } else { Vec::new() };
-    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches: branches.lines().filter_map(|name| name.strip_prefix("refs/heads/").map(String::from)).collect() })
+    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches, tags })
 }
 #[tauri::command]
 fn initial_path() -> String {
@@ -328,6 +339,84 @@ async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expecte
     result
 }
 #[tauri::command]
+async fn inspect_tag(runtime: tauri::State<'_, Runtime>, path: String, oid: String) -> Result<String, String> {
+    if !valid_oid(&oid) { return Err("Invalid tag object identifier.".into()); }
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.git(&repository(&path)?, &["show", "--no-patch", "--no-ext-diff", "--no-textconv", "--no-color", "--format=fuller", &oid, "--"])).await.map_err(|e| e.to_string())?
+}
+fn valid_oid(oid: &str) -> bool { [40, 64].contains(&oid.len()) && oid.chars().all(|c| c.is_ascii_hexdigit()) }
+#[derive(serde::Deserialize)]
+struct RefRequest {
+    path: String, expected_head: String, expected_branch: String, action: String,
+    name: String, original: Option<String>, expected_oid: Option<String>,
+    start_point: Option<String>, annotated: bool, message: Option<String>,
+}
+fn validate_ref_name(runtime: &Runtime, root: &Path, name: &str, branch: bool) -> Result<(), String> {
+    if name.is_empty() || name.starts_with('-') || name.contains(['\0', '\n', '\r']) { return Err("Enter a literal reference name that does not begin with a dash.".into()); }
+    if branch {
+        let validated = runtime.git(root, &["check-ref-format", "--branch", name])?;
+        if validated.trim_end_matches(['\n', '\r']) != name { return Err("Use a literal branch name, not a previous-checkout expression.".into()); }
+    } else { runtime.git(root, &["check-ref-format", &format!("refs/tags/{name}")])?; }
+    Ok(())
+}
+fn execute_ref_action(runtime: Runtime, request: RefRequest) -> Result<CommitOutcome, String> {
+    let result = (|| {
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
+        runtime.event(0, "local", format!("Requested {}: {}", request.action, request.original.as_deref().unwrap_or(&request.name)));
+        let root = commit_target(&runtime, &request.path, &request.expected_head, &request.expected_branch)?;
+        let output = match request.action.as_str() {
+            "rename-branch" | "delete-branch" | "delete-tag" => {
+                let original = request.original.as_deref().ok_or("Select a reference first.")?;
+                let is_branch = request.action != "delete-tag";
+                validate_ref_name(&runtime, &root, original, is_branch)?;
+                let full_ref = format!("refs/{}/{original}", if is_branch { "heads" } else { "tags" });
+                let expected = request.expected_oid.as_deref().filter(|oid| valid_oid(oid)).ok_or("Review the selected reference object first.")?;
+                let actual = runtime.git(&root, &["show-ref", "--hash", "--verify", &full_ref])?;
+                if actual.trim() != expected { return Err("The selected reference changed since this dialog was opened. Cancel and review its refreshed state.".into()); }
+                if is_branch {
+                    if request.action == "delete-branch" && original == request.expected_branch { return Err("Switch away from the current branch before deleting it.".into()); }
+                    let worktrees = runtime.git(&root, &["worktree", "list", "--porcelain", "-z"])?;
+                    let checked_out = worktrees.split('\0').filter(|field| *field == format!("branch {full_ref}")).count();
+                    let own_checkout = usize::from(original == request.expected_branch);
+                    if checked_out > own_checkout { return Err("This branch is checked out in another worktree. Open that worktree before changing its branch.".into()); }
+                    if request.action == "rename-branch" {
+                        validate_ref_name(&runtime, &root, &request.name, true)?;
+                        runtime.git(&root, &["branch", "--move", "--", original, &request.name])?
+                    } else { runtime.git(&root, &["branch", "--delete", "--", original])? }
+                } else {
+                    // Atomically refuse deletion if another process moved this tag after review.
+                    runtime.git(&root, &["update-ref", "-d", &full_ref, expected])?
+                }
+            }
+            "create-tag" => {
+                validate_ref_name(&runtime, &root, &request.name, false)?;
+                let start = request.start_point.as_deref().filter(|oid| valid_oid(oid)).ok_or("Select a commit for the tag.")?;
+                runtime.git(&root, &["cat-file", "-e", &format!("{start}^{{commit}}")])?;
+                if request.annotated {
+                    let message = request.message.as_deref().filter(|text| !text.trim().is_empty() && !text.contains('\0')).ok_or("Enter an annotation message without NUL characters.")?;
+                    runtime.git(&root, &["tag", "--annotate", "--cleanup=verbatim", "--message", message, "--", &request.name, start])?
+                } else {
+                    // A lightweight tag has no tag object or signature, even if tag.gpgSign is enabled.
+                    runtime.git(&root, &["tag", "--no-sign", "--", &request.name, start])?
+                }
+            }
+            _ => return Err("Unsupported local reference action.".into()),
+        };
+        runtime.event(0, "local", "Git completed the reference action. Refreshing repository state.");
+        Ok(match snapshot(runtime.clone(), display_path(&root)) {
+            Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
+            Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
+        })
+    })();
+    if let Err(error) = &result { runtime.event(0, "local", format!("Reference action reported an error; review refreshed state: {error}")); }
+    result
+}
+#[tauri::command]
+async fn edit_reference(runtime: tauri::State<'_, Runtime>, request: RefRequest) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || execute_ref_action(runtime, request)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn inspect_commit(runtime: tauri::State<'_, Runtime>, path: String, sha: String) -> Result<String, String> {
     if ![40, 64].contains(&sha.len()) || !sha.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Invalid commit identifier.".into()); }
     let runtime = runtime.inner().clone();
@@ -410,6 +499,9 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 }
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }
+
+#[cfg(test)]
+mod ref_tests;
