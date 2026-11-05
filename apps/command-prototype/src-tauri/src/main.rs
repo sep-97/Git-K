@@ -32,7 +32,7 @@ impl Runtime {
         let mut effective_args = vec!["--no-pager"];
         effective_args.extend_from_slice(args);
         let args = effective_args.as_slice();
-        let display = format!("{} {}", quote(&executable.to_string_lossy()), args.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" "));
+        let display = command_display(&executable.to_string_lossy(), args);
         self.event(id, "command", display);
         self.event(id, "context", cwd.display().to_string());
         let mut command = Command::new(executable);
@@ -96,8 +96,35 @@ impl Runtime {
     }
 }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 }
+fn command_display(executable: &str, args: &[&str]) -> String {
+    #[cfg(windows)]
+    {
+        // Pass one CRT-escaped command line through the cmdlet, avoiding the
+        // different native argument binders in Windows PowerShell 5.1 and PS 7.
+        let arguments = args.iter().map(|value| windows_argument(value)).collect::<Vec<_>>().join(" ");
+        format!("$gitKProcess = Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait -PassThru; $global:LASTEXITCODE = $gitKProcess.ExitCode", quote(executable), quote(&arguments))
+    }
+    #[cfg(not(windows))]
+    { format!("{} {}", quote(executable), args.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" ")) }
+}
+#[cfg(windows)]
+fn windows_argument(value: &str) -> String {
+    let mut result = String::from("\"");
+    let mut backslashes = 0;
+    for character in value.chars() {
+        if character == '\\' { backslashes += 1; continue; }
+        if character == '"' {
+            result.push_str(&"\\".repeat(backslashes * 2 + 1));
+        } else { result.push_str(&"\\".repeat(backslashes)); }
+        result.push(character);
+        backslashes = 0;
+    }
+    result.push_str(&"\\".repeat(backslashes * 2));
+    result.push('"');
+    result
+}
 fn quote(value: &str) -> String {
-    if !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || "-_/.:=@%".contains(c)) { value.into() }
+    if !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || "-_/.:=".contains(c)) { value.into() }
     else {
         #[cfg(windows)] { format!("'{}'", value.replace('\'', "''")) }
         #[cfg(not(windows))] { format!("'{}'", value.replace('\'', "'\\''")) }
@@ -309,10 +336,7 @@ async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expecte
         runtime.event(0, "local", format!("Requested {} branch: {name}", if start_point.is_some() { "creation of" } else { "checkout of" }));
         let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
         let root = commit_target(&runtime, &path, &expected_head, &expected_branch)?;
-        if name.is_empty() || name.starts_with('-') || name.contains(['\0', '\n', '\r']) { return Err("Enter a literal local branch name that does not begin with a dash.".into()); }
-        // --branch can expand @{-n}; accept only the exact literal spelling supplied.
-        let validated = runtime.git(&root, &["check-ref-format", "--branch", &name])?;
-        if validated.trim_end_matches(['\n', '\r']) != name { return Err("Use a literal branch name, not a previous-checkout expression.".into()); }
+        validate_ref_name(&runtime, &root, &name, true)?;
         let output = if let Some(start) = start_point {
             if ![40, 64].contains(&start.len()) || !start.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Select an existing commit as the branch starting point.".into()); }
             runtime.git(&root, &["cat-file", "-e", &format!("{start}^{{commit}}")])?;
@@ -354,6 +378,7 @@ struct RefRequest {
 fn validate_ref_name(runtime: &Runtime, root: &Path, name: &str, branch: bool) -> Result<(), String> {
     if name.is_empty() || name.starts_with('-') || name.contains(['\0', '\n', '\r']) { return Err("Enter a literal reference name that does not begin with a dash.".into()); }
     if branch {
+        // --branch can expand @{-n}; accept only the exact literal spelling supplied.
         let validated = runtime.git(root, &["check-ref-format", "--branch", name])?;
         if validated.trim_end_matches(['\n', '\r']) != name { return Err("Use a literal branch name, not a previous-checkout expression.".into()); }
     } else { runtime.git(root, &["check-ref-format", &format!("refs/tags/{name}")])?; }

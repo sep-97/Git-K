@@ -54,7 +54,7 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 
 - History is in memory for the current process. Restart recovery, durable storage, retention, output bounds, comprehensive credential redaction and export policy are not settled here.
 - The activity panel displays the latest 150 command entries; the process retains the session event stream. The inspector displays at most 600 lines of a selected output.
-- The command display is formatted for PowerShell on Windows and POSIX shells elsewhere; Rust executes the original argument vector directly.
+- The command display is formatted for PowerShell on Windows and POSIX shells elsewhere; Rust executes the original argument vector directly. Windows displays use `Start-Process` with one CRT-escaped argument string and preserve `LASTEXITCODE`, avoiding Windows PowerShell 5.1 native-argument loss for quotes, empty values and trailing backslashes. Expand an entry to inspect the full recorded command.
 - This is an application command record, not an interactive terminal. Arbitrary commands, PTY sessions, merge/rebase/cherry-pick/revert continuation, remotes and provider APIs are not implemented.
 - Staging uses system Git, so configured attributes and clean filters apply. App index mutations are serialized, but coordination with external Git processes, sparse checkout and submodule staging remain outside validation. Git's index-lock errors are shown without removing its lock files.
 - Stopping the walkthrough stops future scheduled reads; it is not a claim of full child-process-tree cancellation.
@@ -65,7 +65,7 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 - Tags are local only. Tag push, remote deletion, move/rename, signing setup, tag filters and full reference interaction parity remain ahead. Annotation signing honors existing configuration and can fail if signing needs unavailable interaction. Branch rename/delete compares the selected object before Git runs; tag deletion also uses an atomic expected-object comparison. These checks do not establish complete external-process coordination.
 - User review is still required before the production execution contract can be resolved. The first production slice remains gated.
 
-The local reference extension adds four real-Git regression scenarios in `src-tauri/src/ref_tests.rs`. Run `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` with the same Rust/MSVC environment as the native build. Fixtures remain under the temporary `git-k-reference-tests` directory, or `GIT_K_REF_TEST_ROOT` when set. Earlier prototype workflows still rely on frontend/native builds and the UI walkthroughs recorded in their notes; a comprehensive automated suite remains ahead.
+The local reference extension adds four real-Git regression scenarios and two Windows PowerShell replay regressions in `src-tauri/src/ref_tests.rs`. Run `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` with the same Rust/MSVC environment as the native build. Fixtures remain under the temporary `git-k-reference-tests` directory, or `GIT_K_REF_TEST_ROOT` when set. Earlier prototype workflows still rely on frontend/native builds and the UI walkthroughs recorded in their notes; a comprehensive automated suite remains ahead.
 
 See [validation results](VALIDATION.md) for the Windows build and observed workflow evidence.
 See [file staging scope and validation](STAGING.md) for the next prototype feature.

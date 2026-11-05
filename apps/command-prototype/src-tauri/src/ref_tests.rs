@@ -48,7 +48,7 @@ fn rename_and_merged_delete_preserve_work_and_config() {
     assert!(f.apply(f.req("delete-branch", "", Some("renamed&literal"))).err().unwrap().contains("Switch away"));
     f.apply(f.req("delete-branch", "", Some("spare"))).unwrap(); assert!(!f.exists("refs/heads/spare")); f.assert_dirty();
     let events = f.runtime.events.lock().unwrap();
-    assert!(events.iter().any(|event| event.kind == "command" && event.text.contains("branch --delete")));
+    assert!(events.iter().any(|event| event.kind == "command" && event.text.contains("branch") && event.text.contains("--delete")));
     assert!(events.iter().any(|event| event.kind == "completed"));
 }
 
@@ -106,4 +106,45 @@ fn completed_ref_change_survives_a_refresh_failure() {
     assert!(result.snapshot.is_none()); assert!(result.refresh_error.is_some());
     let worktree = format!("core.worktree={}", display_path(&f.root));
     assert!(f.runtime.git(&f.root, &["-c", &worktree, "show-ref", "--verify", "refs/tags/created-before-read-failed"]).is_ok());
+}
+
+#[cfg(windows)]
+fn powershell(script: &str, root: &Path) -> std::process::Output {
+    let mut command = Command::new("powershell.exe");
+    let script = format!("{script}; exit $LASTEXITCODE");
+    command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script]).current_dir(root);
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x08000000);
+    command.output().unwrap()
+}
+
+#[cfg(windows)]
+#[test]
+fn displayed_arguments_round_trip_through_powershell() {
+    let f = Fixture::new();
+    let values = ["@draft", "--%", "name@example.com", "literal'quote", "$(value)", "with space", "literal\"quote", "space and \"quote\"", "with space\\", "with space\\\\", "line1\nline2", "percent%PATH%", ""];
+    for value in values {
+        let display = command_display("git", &["--no-pager", "config", "--local", "review.roundtrip", value]);
+        let script = format!("$draft = @('wrong', 'expanded'); {display}");
+        let output = powershell(&script, &f.root);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(f.git(&["config", "--get", "review.roundtrip"]), format!("{value}\n"));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn displayed_quoted_executable_runs_in_powershell() {
+    let f = Fixture::new();
+    let located = Command::new("where.exe").arg("git").output().unwrap();
+    assert!(located.status.success());
+    let executable = String::from_utf8(located.stdout).unwrap().lines().next().unwrap().to_string();
+    let display = command_display(&executable, &["--no-pager", "check-ref-format", "--branch", "@draft"]);
+    let script = format!("$draft = @('wrong', 'expanded'); {display}");
+    let output = powershell(&script, &f.root);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "@draft");
+    let failed = command_display(&executable, &["rev-parse", "--verify", "refs/heads/missing-review-reference"]);
+    let output = powershell(&failed, &f.root);
+    assert_eq!(output.status.code(), Some(128));
 }

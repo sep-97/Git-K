@@ -4,6 +4,8 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
+The user requested reviewed integration of all local branches into `main`. The [integration review](docs/reviews/main-integration.md) accounts for every branch, the separate Standards/Spec reviews, the corrected command-display issue and validation. Source placement in `main` does not change the prototype status or close production decision gates.
+
 This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. The Windows executable built and passed the [native UI walkthrough](apps/command-prototype/VALIDATION.md), including recording while the activity panel was collapsed. This is throwaway code for the open execution-contract decision, not the production Git manager.
 
 The `prototype/file-staging` extension adds separate Staged/Unstaged lists, side-specific diffs, and real whole-file stage/unstage actions. Its [scope and validation](apps/command-prototype/STAGING.md) cover literal filenames, rename pairs, unborn HEAD, working-file preservation and genuine index-lock failure recovery.
