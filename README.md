@@ -4,7 +4,21 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
-Repository and engineering workflow configuration are initialized. The user confirmed the reference release, platform order, service deployment direction and command visibility. The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Application code, dependencies and build scripts have not yet been created; there is no runnable application at this stage.
+The user requested reviewed integration of all local branches into `main`. The [integration review](docs/reviews/main-integration.md) accounts for every branch, the separate Standards/Spec reviews, the corrected command-display issue and validation. Source placement in `main` does not change the prototype status or close production decision gates.
+
+This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. The Windows executable built and passed the [native UI walkthrough](apps/command-prototype/VALIDATION.md), including recording while the activity panel was collapsed. This is throwaway code for the open execution-contract decision, not the production Git manager.
+
+The `prototype/file-staging` extension adds separate Staged/Unstaged lists, side-specific diffs, and real whole-file stage/unstage actions. Its [scope and validation](apps/command-prototype/STAGING.md) cover literal filenames, rename pairs, unborn HEAD, working-file preservation and genuine index-lock failure recovery.
+
+The `prototype/commit-workflow` extension adds a summary/description composer and real commits from staged changes. Its [scope and validation](apps/command-prototype/COMMITS.md) cover first commits, partially staged contents, hook/identity/signing failures, changed branches and successful commits followed by failed reads.
+
+The `prototype/amend-workflow` extension adds latest-message editing, staged amendments and cancellation that restores the new-commit draft. Its [scope and validation](apps/command-prototype/AMEND.md) cover message-only and merge amendments, literal messages, preserved working files, hook rejection, stale targets and post-success refresh failures.
+
+The `prototype/branch-workflow` extension adds local branch creation at HEAD or a selected commit, optional immediate checkout and branch-list checkout controls. Its [scope and validation](apps/command-prototype/BRANCHES.md) cover literal names, dirty/ignored file protection, same-name tags, linked-worktree restrictions, stale source rejection and checkout-hook/refresh failures.
+
+The `prototype/reference-management` extension adds branch rename/merged deletion and local lightweight/annotated tag creation, inspection and deletion. Its [scope and validation](apps/command-prototype/REFERENCES.md) include real-Git regression checks for reference identity, unmerged/worktree refusal, signing failure and post-success refresh failure, plus native dialog and cancellation checks.
+
+The [wayfinding map](.scratch/gitkraken-parity/map.md) tracks remaining investigations and decisions. The [implementation tracker](.scratch/git-k-implementation/README.md) contains the approved specification, published slices and pending envelopes. Production slices remain gated; the full parity target is unchanged.
 
 The [project baseline](docs/project-start.md) records confirmed requirements, cited reference material, an initial feature inventory, environment observations, and unresolved decisions.
 

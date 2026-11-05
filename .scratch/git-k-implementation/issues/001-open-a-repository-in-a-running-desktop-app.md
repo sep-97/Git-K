@@ -54,6 +54,8 @@ A source checkpoint can contain multiple subcases. The primary owner keeps compl
 
 [Core audit](../../../docs/research/core-parity.md), [connected audit](../../../docs/research/connected-parity.md), [runtime investigation](../../../docs/research/runtime-architecture.md), [coverage](../coverage.md), and [specification](../spec.md).
 
+Prototype context: the throwaway `prototype/execution-history` branch contains a [native execution walkthrough and findings](../../../apps/command-prototype/VALIDATION.md). Its observed hidden-panel recording informs G5; it does not complete this issue, satisfy its remaining acceptance criteria or resolve G5/G8.
+
 ## Publication
 
 Published from the user-approved breakdown on October 30, 2026. The reviewed planning snapshot is commit 54a029b8beaad7203adcca2c44631c96b1c6b798. This file now owns the work state and acceptance criteria.

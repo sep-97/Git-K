@@ -52,3 +52,9 @@ A source checkpoint can contain multiple subcases. The primary owner keeps compl
 ## Publication
 
 Published from the user-approved breakdown on October 30, 2026. The reviewed planning snapshot is commit 54a029b8beaad7203adcca2c44631c96b1c6b798. This file now owns the work state and acceptance criteria.
+
+## Comments
+
+October 31, 2026: the user requested continued incremental implementation. The throwaway `prototype/branch-workflow` adds native local creation and checkout; [scope and workflow evidence](../../../apps/command-prototype/BRANCHES.md) record the bounded result. This is prototype progress only. Rename/delete, graph double-click/context menus, production execution/native decisions and reference verification are not complete. Status and acceptance checkboxes remain unchanged.
+
+October 31, 2026: `prototype/reference-management` adds a bounded native local-reference workflow. [Scope and validation](../../../apps/command-prototype/REFERENCES.md) record branch rename/merged deletion, local lightweight/annotated tags, native cancellation checks and real-Git operation regressions. Full production acceptance, remaining entry points/remote cases and decision gates are unchanged; status and acceptance checkboxes remain unchanged.

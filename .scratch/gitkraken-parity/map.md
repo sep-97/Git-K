@@ -14,7 +14,7 @@ Establish the reference coverage, acceptance approach, and architecture decision
 - Validate Windows first, then macOS and Linux, retaining cross-platform architecture.
 - Connected services are self-hosted first.
 - The terminal/activity panel may collapse; recording application actions continues. Git actions expose real commands; provider actions expose API activity.
-- The current repository has no application implementation. Research and decision assets precede the specification; this map does not authorize replacing full parity with an MVP.
+- A throwaway native execution prototype is captured on `prototype/execution-history`; [validation notes](../../apps/command-prototype/VALIDATION.md) record its narrow findings. Production implementation remains gated; this map does not authorize replacing full parity with an MVP.
 - Read AGENTS.md and docs/agents/issue-tracker.md before modifying work state. Consult the installed wayfinder skill for this map, research for external facts, and grilling plus domain-modeling for human decisions. The subsequent route is to-spec, to-tickets, implement.
 - Research ticket outputs live in docs/research/. Each research ticket is worked in its own worktree on a research/<name> branch. Integrate findings into main before recording their resolutions here.
 - Human decision tickets require the user's answers; recommendations do not resolve them.
