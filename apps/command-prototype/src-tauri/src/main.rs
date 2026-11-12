@@ -183,7 +183,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     let tags = local_refs(&runtime, &path, "refs/tags/")?;
     let head = runtime.git(&path, &["rev-parse", "--revs-only", "HEAD"])?;
     let commits = if !head.trim().is_empty() {
-        let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D"])?;
+        let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D", "HEAD", "--"])?;
         history.lines().filter_map(|line| {
             let fields: Vec<_> = line.split('\x1f').collect();
             if fields.len() != 6 { return None; }
@@ -390,6 +390,12 @@ fn execute_ref_action(runtime: Runtime, request: RefRequest) -> Result<CommitOut
         runtime.event(0, "local", format!("Requested {}: {}", request.action, request.original.as_deref().unwrap_or(&request.name)));
         let root = commit_target(&runtime, &request.path, &request.expected_head, &request.expected_branch)?;
         let output = match request.action.as_str() {
+            "checkout-commit" => {
+                let start = request.start_point.as_deref().filter(|oid| valid_oid(oid)).ok_or("Select a commit to check out.")?;
+                runtime.git(&root, &["cat-file", "-e", &format!("{start}^{{commit}}")])?;
+                // No force, automatic stash, ignored-file overwrite or submodule recursion.
+                runtime.git(&root, &["switch", "--detach", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules", "--", start])?
+            }
             "rename-branch" | "delete-branch" | "delete-tag" => {
                 let original = request.original.as_deref().ok_or("Select a reference first.")?;
                 let is_branch = request.action != "delete-tag";
