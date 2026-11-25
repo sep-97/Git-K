@@ -18,7 +18,17 @@ Published: October 30, 2026, following explicit user approval of the breakdown.
 
 ## Next actionable work
 
+Current checkpoint, November 25, 2026: **Phase C; execution-prototype work corresponding to [15: Merge branches through the graph](issues/015-merge-branches-through-the-graph.md)**. [Merge implementation and evidence](../../apps/command-prototype/MERGES.md) cover normal/explicit-commit/squash merges, conflict state and reviewed abort, and protection for local paths in the computed result. Frontend, 26 real-Git tests and browser UI contract checks passed; native validation and user design review remain pending. Published detached-HEAD history was reconciled before this increment. Production issues retain their existing blockers and unchecked acceptance criteria. The next planned prototype workflow is [16: Resolve a conflicted merge](issues/016-resolve-a-conflicted-merge.md).
+
 The existing [execution and repository coordination prototype](../gitkraken-parity/issues/05-execution-contract.md) is the next actionable map item. Native support decisions and matching-reference access can proceed independently where their prerequisites allow. Production slices remain blocked by the explicit contracts, including G5 and G8; publication does not resolve them.
+
+### Frontier audit — November 12, 2026
+
+The existing [detached HEAD prototype](../../apps/command-prototype/DETACHED.md) is implemented and reviewed within its recorded limits. Eleven regression tests and frontend/native builds passed, with native cancellation and stale-source checks added to the earlier commit/preservation walkthrough. [Issue 014](issues/014-work-in-detached-head-and-preserve-commits.md) links this evidence without claiming production completion.
+
+All 126 defined issues (125 delivery slices plus final verification) still have `Status: blocked` and require unresolved G5/G8; the nine envelopes remain pending decomposition. There is no eligible production implementation ticket. Issue 001 has no implementation dependency and is first after G5/G8 resolve; numeric successors cannot bypass those gates or their own dependencies. G5 requires human review and the execution/coordination/retention contract; G8 requires the Git-distribution and native support choices. G7 reference-access investigation remains independently available and does not unblock production by itself.
+
+The requested continuation rechecked committed detached-HEAD checkpoint `774447b` against base `58e8b49`: independent Standards and Spec reviews found no actionable defects, all eleven regressions passed again, and frontend/native builds passed. The native build used a separate target directory to preserve the already-running prototype. The [continuation evidence](../../apps/command-prototype/DETACHED.md#continuation-audit--november-12-2026) records the executable and limits. Re-reading every issue's dependency/gate links confirmed zero eligible production tickets; implementation remains stopped at G5/G8 without advancing blocked states.
 
 ## Published work and pending scope
 

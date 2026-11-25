@@ -8,10 +8,12 @@ type Commit = { sha: string; parents: string[]; subject: string; author: string;
 type FileChange = { path: string; state: string; previous: string | null };
 type Side = 'staged' | 'unstaged';
 type LocalRef = { name: string; oid: string; kind: string };
-type Snapshot = { path: string; branch: string; head: string; files: FileChange[]; commits: Commit[]; branches: LocalRef[]; tags: LocalRef[] };
-type RefAction = 'rename-branch' | 'delete-branch' | 'create-tag' | 'delete-tag';
+type Snapshot = { path: string; branch: string; head: string; merge_head: string; files: FileChange[]; commits: Commit[]; branches: LocalRef[]; tags: LocalRef[] };
+type RefAction = 'rename-branch' | 'delete-branch' | 'create-tag' | 'delete-tag' | 'checkout-commit';
 type RefDraft = { action: RefAction; name: string; original: string; oid: string; label: string; annotated: boolean; message: string; head: string; branch: string };
 type CommitOutcome = { output: string; snapshot: Snapshot | null; refresh_error: string | null };
+type MergeMode = 'normal' | 'merge-commit' | 'squash';
+type MergeDraft = { path: string; head: string; branch: string; target: string; source: string | null; label: string; mode: MergeMode; message: string; abort: boolean };
 type Event = { seq: number; operation: number; timestamp: number; kind: string; text: string };
 type Operation = { id: number; command: string; cwd: string; output: string; status: string; end: string; timestamp: number };
 
@@ -105,6 +107,9 @@ function App() {
   const [refError, setRefError] = useState('');
   const refDialog = useRef<HTMLDialogElement>(null);
   const refInput = useRef<HTMLInputElement>(null);
+  const [mergeDraft, setMergeDraft] = useState<MergeDraft | null>(null);
+  const [mergeError, setMergeError] = useState('');
+  const mergeDialog = useRef<HTMLDialogElement>(null);
   const draftPath = useRef('');
   const cursor = useRef(0);
   const selectionEpoch = useRef(0);
@@ -116,6 +121,10 @@ function App() {
     if (refDraft) { refDialog.current?.showModal(); refInput.current?.focus(); }
     else refDialog.current?.close();
   }, [!!refDraft]);
+  useEffect(() => {
+    if (mergeDraft) mergeDialog.current?.showModal();
+    else mergeDialog.current?.close();
+  }, [!!mergeDraft]);
   useEffect(() => {
     let alive = true, polling = false;
     const poll = async () => {
@@ -188,7 +197,7 @@ function App() {
     try {
       const outcome = await invoke<CommitOutcome>('change_branch', { path: repo.path, expectedHead: branchDraft?.head ?? repo.head, expectedBranch: branchDraft?.branch ?? repo.branch, name, startPoint, checkout });
       setBranchDraft(null); setRepo(outcome.snapshot); setTitle('Branch action completed'); setScope('Actual output from Git'); setDetail(outcome.output || 'Git completed the branch action. Inspect its recorded command in Action history.');
-      setNotice(startPoint ? `Created ${name}${checkout ? ' and checked it out' : ''}.` : `Checked out ${name}.`);
+      setNotice((startPoint ? `Created ${name}${checkout ? ' and checked it out' : ''}.` : `Checked out ${name}.`) + (repo.branch === 'Detached HEAD' && checkout ? ` Previous detached HEAD: ${repo.head}. Recover with git switch --detach ${repo.head} while the object is retained.` : ''));
       if (outcome.refresh_error) setError(`The branch action succeeded, but refreshing failed: ${outcome.refresh_error}. Reopen the repository before taking another action.`);
     } catch (e) {
       setError(String(e)); setBranchError(String(e)); setTitle('Branch action reported an error'); setDetail('Git or preflight reported an error. A checkout hook can fail after switching branches. Review the refreshed branch and working changes before retrying.');
@@ -197,22 +206,22 @@ function App() {
     } finally { setBusy(''); }
   }
   function beginRef(action: RefAction, reference?: LocalRef, commit?: Commit) {
-    if (!repo || busy || amend || (action === 'create-tag' && !repo.head)) return;
+    if (!repo || busy || amend || hasConflicts || ((action === 'create-tag' || action === 'checkout-commit') && !repo.head)) return;
     setRefError('');
     setRefDraft({ action, name: action === 'rename-branch' ? reference!.name : '', original: reference?.name ?? '', oid: reference?.oid ?? commit?.sha ?? repo.head, label: reference?.name ?? commit?.subject ?? 'Current HEAD', annotated: false, message: '', head: repo.head, branch: repo.branch });
   }
   async function editReference() {
     if (!repo || !refDraft || busy || amend || staleRef) return;
     const draft = refDraft;
-    setBusy('Updating local references…'); setError(''); setRefError(''); setNotice(''); selectionEpoch.current++;
-    setSelected(''); setTitle('Reference action in progress'); setScope(repo.path); setDetail('Waiting for Git…');
+    setBusy(draft.action === 'checkout-commit' ? 'Checking out commit…' : 'Updating local references…'); setError(''); setRefError(''); setNotice(''); selectionEpoch.current++;
+    setSelected(''); setTitle(draft.action === 'checkout-commit' ? 'Commit checkout in progress' : 'Reference action in progress'); setScope(repo.path); setDetail('Waiting for Git…');
     try {
-      const outcome = await invoke<CommitOutcome>('edit_reference', { request: { path: repo.path, expected_head: draft.head, expected_branch: draft.branch, action: draft.action, name: draft.name, original: draft.original || null, expected_oid: draft.original ? draft.oid : null, start_point: draft.action === 'create-tag' ? draft.oid : null, annotated: draft.annotated, message: draft.message } });
-      setRefDraft(null); setRepo(outcome.snapshot); setTitle('Reference action completed'); setScope('Actual Git result'); setDetail(outcome.output || 'Git completed the reference action. Inspect its recorded command in Action history.');
-      setNotice(draft.action === 'rename-branch' ? `Renamed ${draft.original} to ${draft.name}.` : draft.action === 'create-tag' ? `Created local tag ${draft.name}.` : `Deleted local ${draft.action === 'delete-tag' ? 'tag' : 'branch'} ${draft.original}.`);
-      if (outcome.refresh_error) setError(`The reference action succeeded, but refreshing failed: ${outcome.refresh_error}. Reopen the repository before taking another action.`);
+      const outcome = await invoke<CommitOutcome>('edit_reference', { request: { path: repo.path, expected_head: draft.head, expected_branch: draft.branch, action: draft.action, name: draft.name, original: draft.original || null, expected_oid: draft.original ? draft.oid : null, start_point: draft.action === 'create-tag' || draft.action === 'checkout-commit' ? draft.oid : null, annotated: draft.annotated, message: draft.message } });
+      setRefDraft(null); setRepo(outcome.snapshot); setTitle(draft.action === 'checkout-commit' ? 'Commit checked out' : 'Reference action completed'); setScope('Actual Git result'); setDetail(outcome.output || (draft.action === 'checkout-commit' ? 'Git checked out the selected commit in detached HEAD. Create a branch at HEAD to preserve any new commits.' : 'Git completed the reference action. Inspect its recorded command in Action history.'));
+      setNotice(draft.action === 'checkout-commit' ? `Checked out ${draft.oid.slice(0, 7)} in detached HEAD. Previous tip: ${draft.head}. Create a branch here to preserve new commits.` : draft.action === 'rename-branch' ? `Renamed ${draft.original} to ${draft.name}.` : draft.action === 'create-tag' ? `Created local tag ${draft.name}.` : `Deleted local ${draft.action === 'delete-tag' ? 'tag' : 'branch'} ${draft.original}.`);
+      if (outcome.refresh_error) setError(`The ${draft.action === 'checkout-commit' ? 'checkout' : 'reference action'} succeeded, but refreshing failed: ${outcome.refresh_error}. Reopen the repository before taking another action.`);
     } catch (e) {
-      setError(String(e)); setRefError(String(e)); setTitle('Reference action reported an error'); setDetail('Review the recorded error and refreshed repository before retrying. No rollback is promised if hooks changed state.');
+      setError(String(e)); setRefError(String(e)); setTitle(draft.action === 'checkout-commit' ? 'Commit checkout reported an error' : 'Reference action reported an error'); setDetail('Review the recorded error and refreshed repository before retrying. No rollback is promised if hooks changed state.');
       try { setRepo(await invoke<Snapshot>('open_repository', { path: repo.path })); }
       catch (refreshError) { setRepo(null); setRefError(`${String(e)} · Could not refresh repository: ${String(refreshError)}. Cancel and reopen it.`); }
     } finally { setBusy(''); }
@@ -223,6 +232,31 @@ function App() {
     setSelected(`tag:${tag.name}`); setTitle(tag.name); setScope(`${tag.kind === 'tag' ? 'Annotated tag' : 'Lightweight tag'} · ${tag.oid}`); setDetail('Reading tag…');
     try { const output = await invoke<string>('inspect_tag', { path: repo.path, oid: tag.oid }); if (epoch === selectionEpoch.current) setDetail(output); }
     catch (e) { if (epoch === selectionEpoch.current) setDetail(String(e)); }
+  }
+  function beginMerge(source?: LocalRef, commit?: Commit, abort = false) {
+    if (!repo || busy || amend || (abort ? !repo.merge_head : cannotMerge)) return;
+    setRefDraft(null); setMergeError('');
+    const label = source?.name ?? commit?.subject ?? 'Pending merge';
+    setMergeDraft({ path: repo.path, head: repo.head, branch: repo.branch, target: abort ? repo.merge_head : source?.oid ?? commit!.sha, source: source?.name ?? null, label, mode: 'normal', message: `Merge ${source?.name ?? commit?.sha.slice(0, 7) ?? ''} into ${repo.branch}`, abort });
+  }
+  async function mergeBranch() {
+    if (!repo || !mergeDraft || busy || amend || staleMerge) return;
+    const draft = mergeDraft;
+    setBusy(draft.abort ? 'Aborting merge…' : 'Merging…'); setError(''); setMergeError(''); setNotice(''); selectionEpoch.current++;
+    setSelected(''); setTitle(draft.abort ? 'Merge abort in progress' : 'Merge in progress'); setScope(repo.path); setDetail('Waiting for Git…');
+    try {
+      const outcome = await invoke<CommitOutcome>('merge_branch', { request: { path: draft.path, expected_head: draft.head, expected_branch: draft.branch, target: draft.target, source_branch: draft.source, mode: draft.mode, message: draft.message, abort: draft.abort } });
+      setMergeDraft(null); setRepo(outcome.snapshot); setTitle(draft.abort ? 'Merge aborted' : 'Merge action completed'); setScope('Actual Git result'); setDetail(outcome.output || 'Git completed the merge action. Inspect its recorded commands in Action history.');
+      setNotice(draft.abort ? 'Git aborted the pending merge. Review your working changes.' : draft.mode === 'squash' ? 'Git finished squash. Review staged changes and commit when ready.' : `Git completed the merge into ${draft.branch}.`);
+      setTab(draft.abort || draft.mode === 'squash' ? 'changes' : 'history');
+      if (outcome.refresh_error) setError(`The merge action succeeded, but refreshing failed: ${outcome.refresh_error}. Reopen the repository before taking another action.`);
+    } catch (e) {
+      setError(String(e)); setMergeError(String(e)); setTitle('Merge action reported an error'); setDetail('Review the actual Git output and refreshed repository state. A merge may have stopped with conflicts or staged contents; no automatic rollback was performed.');
+      try {
+        const state = await invoke<Snapshot>('open_repository', { path: draft.path }); setRepo(state);
+        if (state.merge_head || state.files.some(isConflict)) { setMergeDraft(null); setTab('changes'); }
+      } catch (refreshError) { setRepo(null); setMergeError(`${String(e)} · Could not refresh repository: ${String(refreshError)}. Cancel and reopen it.`); }
+    } finally { setBusy(''); }
   }
   async function beginAmend() {
     if (!repo || busy || amend || !repo.head) return;
@@ -298,11 +332,14 @@ function App() {
   const active = operations.filter(op => op.status === 'running').length;
   const stagedCount = repo?.files.filter(file => !isConflict(file) && file.state !== '??' && file.state[0] !== ' ').length || 0;
   const hasConflicts = repo?.files.some(isConflict) || false;
+  const cannotMerge = !!busy || !!amend || hasConflicts || !!repo?.merge_head || !repo?.head || repo.branch === 'Detached HEAD' || repo.files.some(file => file.state !== '??');
+  const staleMerge = !!mergeDraft && (mergeDraft.path !== repo?.path || mergeDraft.head !== repo?.head || mergeDraft.branch !== repo?.branch || (mergeDraft.abort ? mergeDraft.target !== repo?.merge_head : !!repo?.merge_head || (!!mergeDraft.source && repo?.branches.find(branch => branch.name === mergeDraft.source)?.oid !== mergeDraft.target)));
   const staleAmend = !!amend && (amend.head !== repo?.head || amend.branch !== repo?.branch);
   const selectedCommit = repo?.commits.find(commit => commit.sha === selected);
   const staleBranch = !!branchDraft && (branchDraft.head !== repo?.head || branchDraft.branch !== repo?.branch);
   const staleRef = !!refDraft && (refDraft.head !== repo?.head || refDraft.branch !== repo?.branch || (!!refDraft.original && (refDraft.action === 'delete-tag' ? repo?.tags : repo?.branches)?.find(ref => ref.name === refDraft.original)?.oid !== refDraft.oid));
   const refDeleting = refDraft?.action === 'delete-branch' || refDraft?.action === 'delete-tag';
+  const refNeedsName = refDraft?.action === 'rename-branch' || refDraft?.action === 'create-tag';
   return <div className="app">
     <header className="titlebar"><div className="brand"><span className="brand-icon"><Icon name="branch" size={23}/></span>Git-K<span className="prototype-badge">EXECUTION PROTOTYPE</span></div><div className="window-note">Tauri <span>·</span> Rust <span>·</span> React</div></header>
     <div className="repo-tab"><Icon name="folder" size={16}/><span>{repoName}</span><span className="tab-dot"/><span className="tab-caption">Local repository</span></div>
@@ -310,6 +347,8 @@ function App() {
     <div className="question"><span className="question-dot"/><span><strong>From changes to commits.</strong> Stage files, write a message and see the actual Git commands and results.</span><span className="read-only-tag">Commits include staged changes only</span></div>
     {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss message"><Icon name="close" size={14}/></button></div>}
     {notice && <div className="notice-banner" role="status"><Icon name="check" size={15}/><span>{notice}</span></div>}
+    {repo?.branch === 'Detached HEAD' && <div className="detached-banner" role="note"><div><strong>Detached HEAD · <code>{repo.head}</code></strong><span>New commits are not attached to a branch. Create a branch at this HEAD to keep them reachable. Save this commit ID before leaving; reflog recovery is temporary.</span></div><button disabled={!!busy || !!amend || hasConflicts} onClick={() => beginBranch()}>Create branch at HEAD</button></div>}
+    {repo?.merge_head && <div className="detached-banner" role="status"><div><strong>Merge in progress on {repo.branch}</strong><span>Resolve with your Git tools and refresh, or abort this merge. The conflict editor and merge continuation workflow are not available yet.</span><code>{repo.merge_head}</code></div><button disabled={!!busy || !!amend} onClick={() => beginMerge(undefined, undefined, true)}>Abort merge…</button></div>}
     <div className="workspace">
       <aside className="sidebar"><div className="sidebar-repo"><div className="repo-avatar">{repoName.slice(0, 1).toUpperCase()}</div><div><strong>{repoName}</strong><small>{repo ? 'Repository connected' : 'Open a folder to begin'}</small></div></div><div className="section-label">WORKSPACE</div><button className={`side-action ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}><Icon name="history"/>Commit history<span>{repo?.commits.length || 0}</span></button><button className={`side-action ${tab === 'changes' ? 'active' : ''}`} onClick={() => setTab('changes')}><Icon name="file"/>Working changes<span>{repo?.files.length || 0}</span></button><div className="section-label">LOCAL BRANCHES <span>{repo?.branches.length || 0}</span></div>
         <button className="new-branch" disabled={!repo?.head || !!busy || !!amend || hasConflicts} onClick={() => beginBranch()}><Icon name="branch" size={14}/>New branch</button>
@@ -319,13 +358,13 @@ function App() {
         <button className="new-branch" disabled={!repo?.head || !!busy || !!amend || hasConflicts} onClick={() => beginRef('create-tag')}>New tag</button>
         {repo?.tags.map(tag => <div className="tag-item" key={tag.name}><button className="tag-select" aria-label={`Inspect tag ${tag.name}`} disabled={!!busy} onClick={() => void inspectTag(tag)} title={`${tag.name} · ${tag.oid}`}><span>{tag.name}</span><small>{tag.kind === 'tag' ? 'annotated' : tag.kind}</small></button><button aria-label={`Delete local tag ${tag.name}`} disabled={!!busy || !!amend || hasConflicts} onClick={() => beginRef('delete-tag', tag)}>×</button></div>)}<div className="sidebar-bottom"><div className="section-label">THIS BUILD</div><p>Real repository data.<br/>Stage, unstage and commit.<br/>In-memory action history.</p><small>Prototype only. Remote actions and interactive shells are not implemented.</small></div></aside>
       <main className={`main-panel ${repo && tab === 'changes' ? 'changes-mode' : ''}`}><div className="panel-heading"><div><h1>{tab === 'history' ? 'Commit history' : 'Working changes'}</h1><span>{repo?.branch ? <><Icon name="branch" size={13}/>{repo.branch}</> : 'Choose a repository'}</span></div><div className="count-pill">{tab === 'history' ? `${repo?.commits.length || 0} loaded` : `${repo?.files.length || 0} changes`}</div></div>{busy && <div className="loading-line">{busy}</div>}{repo ? tab === 'history' ? <Graph commits={repo.commits} selected={selected} onSelect={commit => void inspectCommit(commit)}/> : <><Changes files={repo.files} selected={selected} busy={!!busy} onSelect={(file, side) => void inspectFile(file, side)} onChange={(file, stage) => void changeIndex(file, stage)}/><form className={`commit-composer ${amend ? 'amending' : ''}`} onSubmit={event => { event.preventDefault(); void commitStaged(); }} onKeyDown={event => { if (event.key === 'Escape' && amend) { event.preventDefault(); cancelAmend(); } }} aria-label={amend ? 'Amend latest commit' : 'Create commit'}>
-          <div className="composer-heading"><strong>{amend ? 'Amend latest commit' : 'New commit'}</strong><span>{stagedCount} staged file{stagedCount === 1 ? '' : 's'}</span>{!amend && <button type="button" disabled={!!busy || !repo.head || hasConflicts} onClick={() => void beginAmend()}>Amend latest</button>}</div>
+          <div className="composer-heading"><strong>{amend ? 'Amend latest commit' : 'New commit'}</strong><span>{stagedCount} staged file{stagedCount === 1 ? '' : 's'}</span>{!amend && <button type="button" disabled={!!busy || !repo.head || hasConflicts || !!repo.merge_head} onClick={() => void beginAmend()}>Amend latest</button>}</div>
           {amend && <div className="amend-warning" role="note"><strong>Replacing {amend.head.slice(0, 7)} on {amend.branch}.</strong> This rewrites history, including if already pushed. Coordinate shared history before updating. Includes any staged changes; unstaged files stay in place.{staleAmend && <strong className="stale-amend">Branch or HEAD changed. Cancel amend and review the repository before starting again.</strong>}</div>}
           <input ref={summaryInput} aria-label="Commit summary" placeholder="Commit summary (required)" value={summary} disabled={!!busy} onChange={event => setSummary(event.target.value)}/>
           <textarea aria-label="Commit description" placeholder="Description (optional)" rows={2} value={description} disabled={!!busy} onChange={event => setDescription(event.target.value)}/>
-          <div className="composer-actions"><small>{hasConflicts ? 'Resolve conflicts before committing.' : amend ? 'Keeps the original author. Uses configured hooks and signing.' : stagedCount ? 'Uses configured identity, hooks and signing.' : 'Stage a file to create a commit.'}</small><div className="composer-buttons">{amend && <button type="button" disabled={!!busy} onClick={cancelAmend}>Cancel amend</button>}<button className="accent-button" type="submit" disabled={!!busy || (!amend && !stagedCount) || hasConflicts || staleAmend || !summary.trim()}><Icon name="check" size={14}/>{amend ? 'Update latest commit' : 'Commit staged'}</button></div></div>
+          <div className="composer-actions"><small>{repo.merge_head ? 'Finish the merge with your Git tools, or abort it above.' : hasConflicts ? 'Resolve conflicts before committing.' : amend ? 'Keeps the original author. Uses configured hooks and signing.' : stagedCount ? 'Uses configured identity, hooks and signing.' : 'Stage a file to create a commit.'}</small><div className="composer-buttons">{amend && <button type="button" disabled={!!busy} onClick={cancelAmend}>Cancel amend</button>}<button className="accent-button" type="submit" disabled={!!busy || (!amend && !stagedCount) || hasConflicts || !!repo.merge_head || staleAmend || !summary.trim()}><Icon name="check" size={14}/>{amend ? 'Update latest commit' : 'Commit staged'}</button></div></div>
         </form></> : <div className="empty"><div className="empty-icon"><Icon name="branch" size={34}/></div><h2>A clear view of your Git work</h2><p>Open an existing repository, or create a disposable demo to explore branches, changes and recorded commands.</p><button className="accent-button" onClick={() => void demo()} disabled={!!busy}>Create demo workspace</button></div>}</main>
-      <section className="detail-panel"><div className="detail-heading"><span className="eyebrow">INSPECTOR</span><h2 title={title}>{title}</h2><small>{scope}</small>{selectedCommit && <div className="reference-shortcuts"><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginBranch(selectedCommit)}><Icon name="branch" size={13}/>Create branch here</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginRef('create-tag', undefined, selectedCommit)}>Create tag here</button></div>}</div><Diff text={detail}/></section>
+      <section className="detail-panel"><div className="detail-heading"><span className="eyebrow">INSPECTOR</span><h2 title={title}>{title}</h2><small>{scope}</small>{selectedCommit && <div className="reference-shortcuts"><button className="branch-from-commit" disabled={cannotMerge || selectedCommit.sha === repo?.head} title={cannotMerge ? 'Check out a branch and clear tracked changes or pending operations before merging.' : 'Merge this commit into the current branch'} onClick={() => beginMerge(undefined, selectedCommit)}>Merge into {repo?.branch}…</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts || (repo?.branch === 'Detached HEAD' && selectedCommit.sha === repo.head)} onClick={() => beginRef('checkout-commit', undefined, selectedCommit)}>Check out commit…</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginBranch(selectedCommit)}><Icon name="branch" size={13}/>Create branch here</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginRef('create-tag', undefined, selectedCommit)}>Create tag here</button></div>}</div><Diff text={detail}/></section>
     </div>
     <section className={`activity ${panel ? 'expanded' : 'collapsed'}`}><div className="activity-heading"><button className="activity-toggle" onClick={togglePanel}><Icon name="terminal" size={17}/><strong>Action history</strong><span className="recording-dot"/><span>{operations.length} Git commands recorded</span><span className="collapse-glyph">{panel ? '⌄' : '⌃'}</span></button><div className="activity-tools"><button onClick={() => void watch()} disabled={!repo || !!busy} className={watching ? 'watching' : ''}><Icon name={watching ? 'stop' : 'play'} size={13}/>{watching ? 'Stop remaining checks' : 'Run 8 live checks'}</button><button onClick={() => void fail()} disabled={!repo || !!busy}>Show a real failure</button></div></div>{panel && <div className="activity-body"><div className="operation-list">{operations.slice(0, 150).map(operation => <div className={`operation ${operation.status}`} key={operation.id}><button className="operation-heading" onClick={() => setExpanded(expanded === operation.id ? null : operation.id)}><span className="operation-symbol">{operation.status === 'completed' ? '✓' : operation.status === 'failed' ? '×' : '◌'}</span><time>{new Date(operation.timestamp).toLocaleTimeString([], { hour12: false })}</time><code title={operation.command}>{operation.command}</code><span className="operation-result">{operation.end || 'running'}</span><Icon name="arrow" size={12}/></button>{expanded === operation.id && <div className="operation-output"><div className="recorded-command"><code>{operation.command}</code></div><div className="cwd">{operation.cwd}</div><pre>{operation.output || '(No output)'}</pre></div>}</div>)}{!operations.length && <div className="activity-empty">Commands will appear here when you open a repository.</div>}{operations.length > 150 && <div className="preview-limit">Showing the latest 150 commands in the panel. This session retains all recorded events in memory.</div>}</div><div className="activity-context"><span className="eyebrow">LOCAL ACTIVITY</span>{local.map(event => <p key={event.seq}>{event.text}</p>)}<div className="session-stats"><span>{active} running</span><span>{failed} failed</span><span>{events.length} events</span></div></div></div>}</section>
     <dialog ref={branchDialog} className="branch-dialog" onCancel={event => { event.preventDefault(); if (!busy) setBranchDraft(null); }} aria-labelledby="branch-dialog-title">
@@ -343,19 +382,41 @@ function App() {
     </dialog>
     <dialog ref={refDialog} className="branch-dialog" onCancel={event => { event.preventDefault(); if (!busy) setRefDraft(null); }} aria-labelledby="ref-dialog-title">
       {refDraft && <form onSubmit={event => { event.preventDefault(); void editReference(); }}>
-        <h2 id="ref-dialog-title">{refDraft.action === 'rename-branch' ? 'Manage local branch' : refDraft.action === 'create-tag' ? 'Create a local tag' : refDraft.action === 'delete-tag' ? 'Delete local tag' : 'Delete local branch'}</h2>
+        <h2 id="ref-dialog-title">{refDraft.action === 'checkout-commit' ? 'Check out a commit' : refDraft.action === 'rename-branch' ? 'Manage local branch' : refDraft.action === 'create-tag' ? 'Create a local tag' : refDraft.action === 'delete-tag' ? 'Delete local tag' : 'Delete local branch'}</h2>
         <p><strong>{refDraft.label}</strong><br/><code>{refDraft.oid}</code></p>
-        {!refDeleting && <><label htmlFor="ref-name">{refDraft.action === 'rename-branch' ? 'New branch name' : 'Tag name'}</label><input ref={refInput} id="ref-name" autoComplete="off" disabled={!!busy} value={refDraft.name} onChange={event => setRefDraft({ ...refDraft, name: event.target.value })}/></>}
+        {refNeedsName && <><label htmlFor="ref-name">{refDraft.action === 'rename-branch' ? 'New branch name' : 'Tag name'}</label><input ref={refInput} id="ref-name" autoComplete="off" disabled={!!busy} value={refDraft.name} onChange={event => setRefDraft({ ...refDraft, name: event.target.value })}/></>}
+        {refDraft.action === 'checkout-commit' && <><p className="delete-warning">This enters detached HEAD. New commits will not belong to a branch until you create one. Existing branches stay at their current commits.</p><p className="branch-explanation">Git carries compatible local changes and refuses overwriting tracked, untracked or ignored files. No automatic stash or force checkout. Create a branch at the current HEAD before leaving any detached work you want to keep.</p></>}
         {refDraft.action === 'rename-branch' && refDraft.original === repo?.branch && <p className="branch-explanation">This is the current branch. Switch to another branch before deleting it.</p>}
         {refDraft.action === 'create-tag' && <><label className="checkout-option"><input type="checkbox" checked={refDraft.annotated} disabled={!!busy} onChange={event => setRefDraft({ ...refDraft, annotated: event.target.checked })}/>Annotated tag</label>{refDraft.annotated ? <><label htmlFor="tag-message">Annotation message</label><textarea id="tag-message" rows={4} disabled={!!busy} value={refDraft.message} onChange={event => setRefDraft({ ...refDraft, message: event.target.value })}/><p className="branch-explanation">Uses configured identity and tag signing. Interactive signing prompts are unavailable.</p></> : <p className="branch-explanation">Creates an unsigned lightweight tag at the displayed commit.</p>}</>}
         {refDraft.action === 'delete-branch' && <p className="delete-warning">Delete the local branch <strong>{refDraft.original}</strong>? Git requires it merged into its configured upstream or HEAD. The current branch and branches used by another worktree cannot be deleted here. Working files stay in place.</p>}
         {refDraft.action === 'delete-tag' && <p className="delete-warning">Delete the local tag <strong>{refDraft.original}</strong>? Its annotation/signature reference will be removed locally. Remote tags stay unchanged.</p>}
         {refError && <p className="branch-dialog-error" role="alert">{refError}</p>}
         {staleRef && <p className="branch-dialog-error" role="alert">The source branch, HEAD or selected reference changed. Cancel and review the refreshed repository.</p>}
-        <div className="branch-dialog-actions">{refDraft.action === 'rename-branch' && <button type="button" className="delete-link" disabled={!!busy || refDraft.original === repo?.branch || staleRef} onClick={() => { setRefError(''); setRefDraft({ ...refDraft, action: 'delete-branch' }); }}>Delete branch…</button>}<button type="button" disabled={!!busy} onClick={() => setRefDraft(null)}>Cancel</button><button type="submit" className={refDeleting ? 'danger-button' : 'accent-button'} disabled={!!busy || staleRef || (!refDeleting && !refDraft.name.trim()) || (refDraft.action === 'rename-branch' && refDraft.name === refDraft.original) || (refDraft.action === 'create-tag' && refDraft.annotated && !refDraft.message.trim())}>{busy ? 'Working…' : refDraft.action === 'rename-branch' ? 'Rename branch' : refDraft.action === 'create-tag' ? 'Create tag' : refDraft.action === 'delete-tag' ? 'Delete local tag' : 'Delete local branch'}</button></div>
+        {refDraft.action === 'rename-branch' && refDraft.original !== repo?.branch && <button type="button" disabled={cannotMerge || staleRef} onClick={() => beginMerge({ name: refDraft.original, oid: refDraft.oid, kind: 'commit' })}>Merge into {repo?.branch}…</button>}
+        <div className="branch-dialog-actions">{refDraft.action === 'rename-branch' && <button type="button" className="delete-link" disabled={!!busy || refDraft.original === repo?.branch || staleRef} onClick={() => { setRefError(''); setRefDraft({ ...refDraft, action: 'delete-branch' }); }}>Delete branch…</button>}<button type="button" disabled={!!busy} onClick={() => setRefDraft(null)}>Cancel</button><button type="submit" className={refDeleting ? 'danger-button' : 'accent-button'} disabled={!!busy || staleRef || (refNeedsName && !refDraft.name.trim()) || (refDraft.action === 'rename-branch' && refDraft.name === refDraft.original) || (refDraft.action === 'create-tag' && refDraft.annotated && !refDraft.message.trim())}>{busy ? 'Working…' : refDraft.action === 'checkout-commit' ? 'Check out detached HEAD' : refDraft.action === 'rename-branch' ? 'Rename branch' : refDraft.action === 'create-tag' ? 'Create tag' : refDraft.action === 'delete-tag' ? 'Delete local tag' : 'Delete local branch'}</button></div>
       </form>}
     </dialog>
-    <footer><div><span className="footer-dot"/>{busy || (watching ? 'Live repository checks are running' : 'Ready')}<span className="footer-separator">/</span><Icon name="branch" size={12}/>{repo?.branch || 'No repository'}</div><div>Local session only<span className="footer-separator">/</span>Reference management prototype</div></footer>
+    <dialog ref={mergeDialog} className="branch-dialog" onCancel={event => { event.preventDefault(); if (!busy) setMergeDraft(null); }} aria-labelledby="merge-dialog-title">
+      {mergeDraft && <form onSubmit={event => { event.preventDefault(); void mergeBranch(); }}>
+        <h2 id="merge-dialog-title">{mergeDraft.abort ? 'Abort pending merge' : `Merge into ${mergeDraft.branch}`}</h2>
+        <p>{mergeDraft.abort ? 'Pending incoming commit' : mergeDraft.label}<br/><code>{mergeDraft.target}</code></p>
+        <p>Current branch: <strong>{mergeDraft.branch}</strong><br/><code>{mergeDraft.head}</code></p>
+        {mergeDraft.abort ? <p className="delete-warning">Abort this merge? Git will try to restore the pre-merge tracked state. This discards edits made to resolve this merge. Review any work you need to save before continuing.</p> : <>
+          <label htmlFor="merge-mode">Merge mode</label>
+          <select id="merge-mode" disabled={!!busy} value={mergeDraft.mode} onChange={event => setMergeDraft({ ...mergeDraft, mode: event.target.value as MergeMode })}>
+            <option value="normal">Merge (fast-forward when possible)</option>
+            <option value="merge-commit">Always create a merge commit</option>
+            <option value="squash">Squash into staged changes</option>
+          </select>
+          {mergeDraft.mode === 'squash' ? <p className="branch-explanation">Stages the combined result without a commit. Review Working changes and commit when ready. Conflicting squashes are refused before changing your index or working files.</p> : <><label htmlFor="merge-message">Merge commit message</label><textarea id="merge-message" rows={3} disabled={!!busy} value={mergeDraft.message} onChange={event => setMergeDraft({ ...mergeDraft, message: event.target.value })}/><p className="branch-explanation">Fast-forward merges do not create a commit or use this message. Other merges use configured identity, hooks and signing. Conflicts leave a pending merge you can inspect or abort.</p></>}
+          <p className="branch-explanation">Requires a clean tracked index and working tree. No automatic stash. Git protects untracked and ignored files from overwrite.</p>
+        </>}
+        {mergeError && <p className="branch-dialog-error" role="alert">{mergeError}</p>}
+        {staleMerge && <p className="branch-dialog-error" role="alert">The repository, branch, HEAD or pending merge changed. Cancel and review refreshed state.</p>}
+        <div className="branch-dialog-actions"><button type="button" autoFocus disabled={!!busy} onClick={() => setMergeDraft(null)}>Cancel</button><button type="submit" className={mergeDraft.abort ? 'danger-button' : 'accent-button'} disabled={!!busy || staleMerge || (!mergeDraft.abort && mergeDraft.mode !== 'squash' && !mergeDraft.message.trim())}>{busy ? 'Working…' : mergeDraft.abort ? 'Abort merge' : mergeDraft.mode === 'squash' ? 'Squash into staging' : 'Merge'}</button></div>
+      </form>}
+    </dialog>
+    <footer><div><span className="footer-dot"/>{busy || (watching ? 'Live repository checks are running' : 'Ready')}<span className="footer-separator">/</span><Icon name="branch" size={12}/>{repo?.branch || 'No repository'}</div><div>Local session only<span className="footer-separator">/</span>Merge workflow prototype</div></footer>
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);

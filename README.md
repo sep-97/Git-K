@@ -4,6 +4,8 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
+Current implementation checkpoint, November 25, 2026: **Phase C, prototype work corresponding to item 015 — merging branches and commits**. The [merge increment](apps/command-prototype/MERGES.md) adds normal/explicit-commit/squash modes, pending-merge review/abort and file-collision checks against the computed result tree. The frontend build, 26 real-Git tests and browser UI contract checks passed; native validation for this increment remains pending. The branch also retains the published detached-HEAD history and evidence. Production tickets keep their decision gates.
+
 The user requested reviewed integration of all local branches into `main`. The [integration review](docs/reviews/main-integration.md) accounts for every branch, the separate Standards/Spec reviews, the corrected command-display issue and validation. Source placement in `main` does not change the prototype status or close production decision gates.
 
 This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. The Windows executable built and passed the [native UI walkthrough](apps/command-prototype/VALIDATION.md), including recording while the activity panel was collapsed. This is throwaway code for the open execution-contract decision, not the production Git manager.
