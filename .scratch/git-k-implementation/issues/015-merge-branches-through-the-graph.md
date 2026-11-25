@@ -48,3 +48,9 @@ A source checkpoint can contain multiple subcases. The primary owner keeps compl
 ## Publication
 
 Published from the user-approved breakdown on October 30, 2026. The reviewed planning snapshot is commit 54a029b8beaad7203adcca2c44631c96b1c6b798. This file now owns the work state and acceptance criteria.
+
+## Prototype evidence — November 25, 2026
+
+[Merge workflow findings](../../../apps/command-prototype/MERGES.md) record normal/explicit-commit/squash outcomes, reviewed source identity, conflict state and abort, result-tree file protection and success followed by failed refresh. The Linux suite passed 26 real-Git tests, including eleven new merge scenarios; the frontend build and browser IPC contract checks passed. Current entry points are the selected-graph-commit inspector and local branch management dialog. Native interaction validation, complete context/drag entry points and persistent squash preferences remain pending.
+
+Status remains blocked and acceptance criteria remain unchecked: production dependencies 013/003 and decisions G5/G8 are incomplete. This is evidence for the claimed execution prototype, not production completion.

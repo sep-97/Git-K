@@ -355,3 +355,6 @@ fn detached_checkout_rejects_noncommit_objects_and_moved_head() {
     assert_eq!(fs::read_to_string(f.root.join("file.txt")).unwrap(), "working\n");
     assert_eq!(fs::read_to_string(f.root.join("untracked.txt")).unwrap(), "keep\n");
 }
+
+#[path = "merge_tests.rs"]
+mod merge_tests;

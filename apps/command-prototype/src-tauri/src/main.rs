@@ -23,6 +23,14 @@ struct Runtime {
     watch: Arc<AtomicBool>,
     mutation: Arc<Mutex<()>>,
 }
+struct GitOutput { status: std::process::ExitStatus, stdout: String, stderr: String }
+impl GitOutput {
+    fn error(&self) -> String {
+        let error = self.stderr.trim();
+        if error.is_empty() { format!("Git exited with {}. Inspect the recorded output in Action history.", self.status.code().map(|v| v.to_string()).unwrap_or_else(|| "an interruption".into())) }
+        else { error.into() }
+    }
+}
 impl Runtime {
     fn event(&self, operation: u64, kind: &str, text: impl Into<String>) {
         let mut events = self.events.lock().unwrap();
@@ -30,6 +38,10 @@ impl Runtime {
         events.push(Event { seq, operation, timestamp: now(), kind: kind.into(), text: text.into() });
     }
     fn git(&self, cwd: &Path, args: &[&str]) -> Result<String, String> {
+        let output = self.git_output(cwd, args)?;
+        if output.status.success() { Ok(output.stdout) } else { Err(output.error()) }
+    }
+    fn git_output(&self, cwd: &Path, args: &[&str]) -> Result<GitOutput, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let executable = std::env::var_os("GIT_K_GIT").unwrap_or_else(|| "git".into());
         let mut effective_args = vec!["--no-pager"];
@@ -91,11 +103,7 @@ impl Runtime {
             Err(error) => { self.event(id, "failed", error.clone()); return Err(error); }
         };
         self.event(id, if result.success() { "completed" } else { "failed" }, format!("exit {} · {} ms", result.code().map(|v| v.to_string()).unwrap_or_else(|| "interrupted".into()), now() - started));
-        if !result.success() {
-            let error = String::from_utf8_lossy(&err).trim().to_string();
-            return Err(if error.is_empty() { format!("Git exited with {}. Inspect the recorded output in Action history.", result.code().map(|v| v.to_string()).unwrap_or_else(|| "an interruption".into())) } else { error });
-        }
-        Ok(String::from_utf8_lossy(&out).into_owned())
+        Ok(GitOutput { status: result, stdout: String::from_utf8_lossy(&out).into_owned(), stderr: String::from_utf8_lossy(&err).into_owned() })
     }
 }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 }
@@ -146,9 +154,101 @@ struct Commit { sha: String, parents: Vec<String>, subject: String, author: Stri
 #[derive(Serialize)]
 struct LocalRef { name: String, oid: String, kind: String }
 #[derive(Serialize)]
-struct Snapshot { path: String, branch: String, head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<LocalRef>, tags: Vec<LocalRef> }
+struct Snapshot { path: String, branch: String, head: String, merge_head: String, files: Vec<FileChange>, commits: Vec<Commit>, branches: Vec<LocalRef>, tags: Vec<LocalRef> }
 #[derive(Serialize)]
 struct CommitOutcome { output: String, snapshot: Option<Snapshot>, refresh_error: Option<String> }
+#[derive(Clone, serde::Deserialize)]
+struct MergeRequest {
+    path: String, expected_head: String, expected_branch: String,
+    target: String, source_branch: Option<String>, mode: String, message: String, abort: bool,
+}
+fn merge_head(runtime: &Runtime, root: &Path) -> Result<String, String> {
+    let path = runtime.git(root, &["rev-parse", "--git-path", "MERGE_HEAD"])?;
+    match fs::read_to_string(root.join(path.trim())) {
+        Ok(value) => Ok(value.trim().into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(format!("Could not read the current merge state: {error}")),
+    }
+}
+fn protect_merge_paths(runtime: &Runtime, root: &Path, tree_oid: &str) -> Result<(), String> {
+    // Git's ort merge path can overwrite ignored files even with
+    // --no-overwrite-ignore. Inspect the computed result, including rename paths.
+    let tree = runtime.git(root, &["ls-tree", "-r", "--name-only", "-z", tree_oid])?;
+    let incoming: std::collections::BTreeSet<String> = tree.split('\0').filter(|path| !path.is_empty()).map(String::from).collect();
+    let local = runtime.git(root, &["ls-files", "--others", "-z", "--"])?;
+    for path in local.split('\0').filter(|path| !path.is_empty()) {
+        let path = path.trim_end_matches('/');
+        let prefix = format!("{path}/");
+        let descendant = incoming.range(prefix.clone()..).next().is_some_and(|entry| entry.starts_with(&prefix));
+        let mut ancestor = path;
+        let mut collision = incoming.contains(path) || descendant;
+        while let Some(index) = ancestor.rfind('/') {
+            ancestor = &ancestor[..index]; collision |= incoming.contains(ancestor);
+        }
+        if collision { return Err(format!("A local untracked or ignored path collides with incoming history: {path}. Move or preserve it before merging.")); }
+    }
+    Ok(())
+}
+fn execute_merge(runtime: Runtime, request: MergeRequest) -> Result<CommitOutcome, String> {
+    let result = (|| {
+        let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
+        runtime.event(0, "local", if request.abort { "Requested abort of the reviewed merge.".into() } else { format!("Requested {} merge of {} into {}.", request.mode, request.target, request.expected_branch) });
+        let root = operation_target(&runtime, &request.path, &request.expected_head, &request.expected_branch, request.abort)?;
+        let output = if request.abort {
+            let actual = merge_head(&runtime, &root)?;
+            if actual.is_empty() || actual != request.target { return Err("The pending merge changed. Refresh and review it before aborting.".into()); }
+            runtime.git(&root, &["merge", "--abort"])?
+        } else {
+            if request.expected_branch == "Detached HEAD" || request.expected_head.is_empty() { return Err("Check out a branch with an existing commit before merging.".into()); }
+            if !valid_oid(&request.target) { return Err("Select an existing commit to merge.".into()); }
+            if !["normal", "merge-commit", "squash"].contains(&request.mode.as_str()) { return Err("Choose a supported merge mode.".into()); }
+            if request.message.contains('\0') || (request.mode != "squash" && request.message.trim().is_empty()) { return Err("Enter a merge message without NUL characters.".into()); }
+            if changes(&runtime, &root)?.iter().any(|file| file.state != "??") { return Err("Commit or clear staged and unstaged tracked changes before merging. This prototype never automatically stashes them.".into()); }
+            if let Some(source) = &request.source_branch {
+                validate_ref_name(&runtime, &root, source, true)?;
+                let actual = runtime.git(&root, &["show-ref", "--hash", "--verify", &format!("refs/heads/{source}")])?;
+                if actual.trim() != request.target { return Err("The incoming branch changed since review. Cancel and review its refreshed state.".into()); }
+            }
+            runtime.git(&root, &["cat-file", "-e", &format!("{}^{{commit}}", request.target)])?;
+            // Preview also supplies paths produced by directory renames. A conflicted
+            // preview has exit 1 and still supplies a tree; other failures stop here.
+            let preview = runtime.git_output(&root, &["merge-tree", "--write-tree", &request.expected_head, &request.target])?;
+            if !preview.status.success() && preview.status.code() != Some(1) { return Err(format!("Merge preview unavailable. Git 2.38+ is required; no merge was started. {}", preview.error())); }
+            let tree = preview.stdout.lines().next().filter(|oid| valid_oid(oid)).ok_or("Merge preview did not return a valid result tree. No merge was started.")?;
+            protect_merge_paths(&runtime, &root, tree)?;
+            if request.mode == "squash" && !preview.status.success() {
+                // Conflicting squashes have no MERGE_HEAD for merge --abort.
+                return Err("Squash preview found conflicts. No merge was started; your index and working files stay in place. Use the later conflict workflow for this squash.".into());
+            }
+            // Clear branch merge flags so they cannot override the reviewed mode.
+            // Configured identity, signing, hooks, attributes and merge drivers still apply.
+            let branch_options = format!("branch.{}.mergeOptions=", request.expected_branch);
+            let mut args = vec!["-c", &branch_options, "merge", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "--no-rerere-autoupdate"];
+            match request.mode.as_str() {
+                "normal" => args.extend(["--no-squash", "--commit", "--ff"]),
+                "merge-commit" => args.extend(["--no-squash", "--commit", "--no-ff"]),
+                "squash" => args.extend(["--squash", "--no-commit", "--ff"]),
+                _ => unreachable!(),
+            }
+            if request.mode != "squash" { args.extend(["--cleanup=verbatim", "--message", &request.message]); }
+            args.extend(["--", &request.target]);
+            runtime.git(&root, &args)?
+        };
+        runtime.event(0, "local", "Git completed the merge action. Refreshing repository state.");
+        Ok(match snapshot(runtime.clone(), display_path(&root)) {
+            Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
+            Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
+        })
+    })();
+    if let Err(error) = &result { runtime.event(0, "local", format!("Merge action reported an error; review actual state before retrying: {error}")); }
+    result
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn merge_branch(runtime: tauri::State<'_, Runtime>, request: MergeRequest) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || execute_merge(runtime, request)).await.map_err(|e| e.to_string())?
+}
 fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
     let status = runtime.git(path, &["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
     let mut entries = status.split('\0').filter(|s| !s.is_empty());
@@ -194,7 +294,8 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
             Some(Commit { sha: fields[0].into(), parents: fields[1].split_whitespace().map(String::from).collect(), subject: fields[2].into(), author: fields[3].into(), age: fields[4].into(), refs: fields[5].into() })
         }).collect()
     } else { Vec::new() };
-    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches, tags })
+    let merge_head = merge_head(&runtime, &path)?;
+    Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), merge_head, files, commits, branches, tags })
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -297,6 +398,9 @@ async fn latest_message(runtime: tauri::State<'_, Runtime>, path: String, expect
     }).await.map_err(|e| e.to_string())?
 }
 fn commit_target(runtime: &Runtime, path: &str, expected_head: &str, expected_branch: &str) -> Result<PathBuf, String> {
+    operation_target(runtime, path, expected_head, expected_branch, false)
+}
+fn operation_target(runtime: &Runtime, path: &str, expected_head: &str, expected_branch: &str, allow_merge: bool) -> Result<PathBuf, String> {
     let requested = repository(path)?;
     let root = PathBuf::from(runtime.git(&requested, &["rev-parse", "--show-toplevel"])?.trim());
     let head = runtime.git(&root, &["rev-parse", "--revs-only", "HEAD"])?;
@@ -304,10 +408,11 @@ fn commit_target(runtime: &Runtime, path: &str, expected_head: &str, expected_br
     let branch = if branch.trim().is_empty() { "Detached HEAD" } else { branch.trim() };
     if head.trim() != expected_head || branch != expected_branch { return Err("The current branch or HEAD changed since this view was loaded. Review the refreshed repository and reopen any amend or branch dialog before trying again.".into()); }
     for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
+        if allow_merge && marker == "MERGE_HEAD" { continue; }
         let marker_path = runtime.git(&root, &["rev-parse", "--git-path", marker])?;
         if root.join(marker_path.trim()).exists() { return Err("An unfinished merge, rebase, cherry-pick or revert needs its own continuation workflow. Finish it outside this prototype before changing branches or committing.".into()); }
     }
-    if changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before changing branches or committing.".into()); }
+    if !allow_merge && changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before changing branches or committing.".into()); }
     Ok(root)
 }
 fn execute_commit(runtime: Runtime, path: String, expected_head: String, expected_branch: String, summary: String, description: String, amend: bool) -> Result<CommitOutcome, String> {
@@ -557,7 +662,7 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 #[cfg(feature = "desktop")]
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, merge_branch, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }
 

@@ -15,6 +15,8 @@ Throwaway Tauri + Rust + React prototype. `prototype/execution-history` captures
 - Choose **⋯** beside a branch to rename it or review its deletion. Deletion uses Git's normal merged-branch requirement and does not force removal. Switch away from the current branch before deleting it; branches used by another worktree are protected.
 - Choose **New tag** at HEAD or **Create tag here** on a selected history commit. Create an unsigned lightweight tag or add an annotation using configured identity/signing. Select a tag to inspect its actual object and annotation. The **×** beside a tag opens an explicit local deletion review dialog; Cancel/Escape leaves it intact.
 - Select a history commit and choose **Check out commit…** to review entering detached HEAD. The persistent banner shows its full commit ID and **Create branch at HEAD**. Commit staged changes normally, then create a branch there to preserve them. Existing branch **Checkout** controls return to a branch; the notice retains the departed detached ID for recovery while Git still retains the object.
+- Select a graph commit and choose **Merge into current branch…**, or choose **⋯ → Merge into current branch…** on a local branch. Review exact source/destination IDs and choose normal merge, an explicit merge commit, or squash into staged changes. Merging requires a clean tracked index/worktree and Git 2.38+. Squash preserves your commit draft and opens Working changes for review/manual commit.
+- A stopped normal merge shows a persistent banner. **Abort merge…** reviews discarding resolution edits and delegates to Git. Conflicting squashes are refused during preview. The conflict editor and merge continuation remain the next workflow.
 - Expand an action-history entry to inspect its command, working directory, captured output and exit status.
 - Run eight real status checks one second apart, collapse the activity panel, then reopen it to inspect the captured operations.
 - Stop scheduling remaining checks, or run a deliberately missing-reference lookup to inspect an actual Git failure.
@@ -52,6 +54,8 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 11. Choose **New tag**, enter a name and optionally enable **Annotated tag** with a message. Select the created tag to inspect its object. Its **×** opens local deletion review; remote tags are not changed.
 12. Select a historical commit, choose **Check out commit…**, and review/confirm **Check out detached HEAD**. Its banner shows the current commit ID. Commit staged work, then choose **Create branch at HEAD** to keep that new history reachable. Return through an existing branch's **Checkout**. Cancel/Escape leaves the checkout dialog without requesting a write.
 
+13. In a disposable repository with a clean tracked tree and an incoming branch, open its **⋯ → Merge into current branch…** dialog. Try normal merge and inspect actual parents. Try **Always create a merge commit** on a fresh fixture. Try **Squash into staged changes**, inspect the staged result, then commit manually. A normal conflict keeps its actual files/index and offers **Abort merge…**; Cancel/Escape leaves the pending state intact.
+
 ## Deliberate limits
 
 - History is in memory for the current process. Restart recovery, durable storage, retention, output bounds, comprehensive credential redaction and export policy are not settled here.
@@ -67,7 +71,7 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 - Tags are local only. Tag push, remote deletion, move/rename, signing setup, tag filters and full reference interaction parity remain ahead. Annotation signing honors existing configuration and can fail if signing needs unavailable interaction. Branch rename/delete compares the selected object before Git runs; tag deletion also uses an atomic expected-object comparison. These checks do not establish complete external-process coordination.
 - User review is still required before the production execution contract can be resolved. The first production slice remains gated.
 
-The reference and detached-HEAD extensions include 10 real-Git regressions and two additional Windows PowerShell replay regressions in `src-tauri/src/ref_tests.rs`. Run `cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1` with the native build prerequisites, or add `--no-default-features` before `--` to test the shared synchronous Git operations without a desktop/webview. The normal desktop features remain enabled by default. Fixtures remain under the temporary `git-k-reference-tests` directory, or `GIT_K_REF_TEST_ROOT` when set. Earlier prototype workflows still rely on frontend/native builds and the UI walkthroughs recorded in their notes; a comprehensive automated suite remains ahead.
+The reference, detached-HEAD and merge extensions include 26 real-Git regressions and two additional Windows PowerShell replay regressions in `src-tauri/src/ref_tests.rs` and its `merge_tests.rs` module. Run `cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1` with the native build prerequisites, or add `--no-default-features` before `--` to test the shared synchronous Git operations without a desktop/webview. The normal desktop features remain enabled by default. Fixtures remain under the temporary `git-k-reference-tests` directory, or `GIT_K_REF_TEST_ROOT` when set. Earlier prototype workflows still rely on frontend/native builds and the UI walkthroughs recorded in their notes; a comprehensive automated suite remains ahead.
 
 See [validation results](VALIDATION.md) for the Windows build and observed workflow evidence.
 See [file staging scope and validation](STAGING.md) for the next prototype feature.
@@ -76,3 +80,5 @@ See [amend workflow scope and validation](AMEND.md) for latest-message updates, 
 See [branch workflow scope and validation](BRANCHES.md) for creation, checkout and preservation/failure behavior.
 See [local reference scope and validation](REFERENCES.md) for branch rename/delete, tags and the real-Git regression checks.
 See [detached HEAD scope and validation](DETACHED.md) for historical-commit checkout, commit preservation and recovery context.
+
+See [merge scope and validation](MERGES.md) for reviewed merge modes, conflict/abort, preview protection and the browser check (`npm run check:merge-ui`). Browser checks use an IPC fixture; real Git behavior is checked by the Rust suite. Native merge validation remains pending.

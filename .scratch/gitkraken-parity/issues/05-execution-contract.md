@@ -35,6 +35,8 @@ The `prototype/reference-management` extension adds local branch rename/merged d
 
 ## Reviewed integration
 
+The user requested the next work item and a push on November 25, 2026. The [merge workflow prototype](../../../apps/command-prototype/MERGES.md) continues the claimed execution investigation with normal/explicit-commit/squash merging and truthful conflict/failure states. Production issue 015 keeps all dependencies and decision gates.
+
 The user requested continued implementation and a current-step report on November 25, 2026. The next prototype increment is [detached HEAD and commit preservation](../../../apps/command-prototype/DETACHED.md): enter detached HEAD through an explicit review, keep detached commits visible, and preserve them on a branch. This work remains within this claimed prototype decision; production issue 014 retains its blockers.
 
 The user explicitly requested review and merge of all local branches into `main`. The [integration review](../../../docs/reviews/main-integration.md) records branch coverage and separate Standards/Spec results, including the corrected Windows command-display defect. This authorizes prototype source placement in main, not production acceptance; this decision remains claimed and production gates remain unchanged.

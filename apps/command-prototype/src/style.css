@@ -12,3 +12,4 @@
 .recorded-command{font:10px/1.6 "Cascadia Code",Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;margin-bottom:10px;color:#c5b4ed}
 
 .detached-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 20px;background:#352d22;border-bottom:1px solid #665337;color:#e6c58b;font-size:11px;flex-shrink:0}.detached-banner>div{min-width:0}.detached-banner strong,.detached-banner span{display:block;overflow-wrap:anywhere;line-height:1.6}.detached-banner code{font-size:10px}.detached-banner button{flex-shrink:0;font-size:11px}
+.branch-dialog select{width:100%;background:#10151e;color:#d9dfeb;border:1px solid #47516a;border-radius:5px;padding:10px;font-size:12px}.branch-dialog select:focus-visible{outline:2px solid #aa96ff;outline-offset:2px}
