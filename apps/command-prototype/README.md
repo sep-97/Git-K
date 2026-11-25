@@ -7,7 +7,7 @@ Throwaway Tauri + Rust + React prototype. `prototype/execution-history` captures
 - Open a local repository through a folder picker or path field.
 - Inspect actual branches, a graph of up to 60 loaded commits, working changes, commit details and file diffs.
 - Inspect Staged and Unstaged files separately, including both sides of partially staged files.
-- Stage or unstage one file or all available files. These actions update the actual repository index and preserve working files. Conflict resolution is unavailable in this prototype.
+- Stage or unstage one file or all available files. These actions update the actual repository index and preserve working files. Unresolved merge files use the conflict editor.
 - Enter a commit summary and optional description, then commit staged contents with the repository's configured identity, hooks and signing. A failed commit retains the draft and refreshes repository state.
 - Choose **Amend latest** to load the latest message. Edit the message with or without staged changes, review the target and rewrite warning, then choose **Update latest commit**. **Cancel amend** (or Escape inside the composer) restores your previous new-commit draft and leaves Git state in place.
 - Choose **New branch** to create at current HEAD, or select a history commit and choose **Create branch here** in the inspector. Enter a literal name, optionally switch to it, or cancel without a Git write.
@@ -21,6 +21,8 @@ Throwaway Tauri + Rust + React prototype. `prototype/execution-history` captures
 - Run eight real status checks one second apart, collapse the activity panel, then reopen it to inspect the captured operations.
 - Stop scheduling remaining checks, or run a deliberately missing-reference lookup to inspect an actual Git failure.
 - Create a new disposable demo with a merge history, a modified file and an untracked file. New demos have a local demo identity and unsigned commits. Staging modifies the selected repository's index; committing writes a real commit.
+
+For pending merges, see [conflict resolution and merge continuation](CONFLICTS.md).
 
 ## Run from source
 
@@ -61,7 +63,7 @@ The executable needs Git and the WebView2 Runtime. Rust and Node are build prere
 - History is in memory for the current process. Restart recovery, durable storage, retention, output bounds, comprehensive credential redaction and export policy are not settled here.
 - The activity panel displays the latest 150 command entries; the process retains the session event stream. The inspector displays at most 600 lines of a selected output.
 - The command display is formatted for PowerShell on Windows and POSIX shells elsewhere; Rust executes the original argument vector directly. Windows displays use `Start-Process` with one CRT-escaped argument string and preserve `LASTEXITCODE`, avoiding Windows PowerShell 5.1 native-argument loss for quotes, empty values and trailing backslashes. Expand an entry to inspect the full recorded command.
-- This is an application command record, not an interactive terminal. Arbitrary commands, PTY sessions, merge/rebase/cherry-pick/revert continuation, remotes and provider APIs are not implemented.
+- This is an application command record, not an interactive terminal. Arbitrary commands, PTY sessions, rebase/cherry-pick/revert continuation, remotes and provider APIs are not implemented.
 - Staging uses system Git, so configured attributes and clean filters apply. App index mutations are serialized, but coordination with external Git processes, sparse checkout and submodule staging remain outside validation. Git's index-lock errors are shown without removing its lock files.
 - Stopping the walkthrough stops future scheduled reads; it is not a claim of full child-process-tree cancellation.
 - Native filename handling in this prototype uses UTF-8 text conversion; complete non-Unicode round-tripping, repository concurrency, hook/editor/auth interactions and cross-platform behavior remain unvalidated.

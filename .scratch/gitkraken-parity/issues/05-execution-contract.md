@@ -33,6 +33,8 @@ The next requested increment, `prototype/branch-workflow`, adds local branch cre
 
 The `prototype/reference-management` extension adds local branch rename/merged deletion and local tag create/inspect/delete. [Reference findings](../../../apps/command-prototype/REFERENCES.md) combine native rename/tag/cancellation checks with real-Git operation-level regressions for actual deletions, unmerged/worktree refusals, stale objects, signing failure and completed writes followed by failed reads. Branch mutations still have external-process races; production issues 013/034 and this decision remain gated.
 
+The [conflict resolution prototype](../../../apps/command-prototype/CONFLICTS.md) adds reviewed file resolutions and merge continuation. Its headless tests cover staged output, merge parents, stale reviews, an index lock, external tools and a failed hook. Native validation and the production execution decision remain open.
+
 ## Reviewed integration
 
 The user requested the next work item and a push on November 25, 2026. The [merge workflow prototype](../../../apps/command-prototype/MERGES.md) continues the claimed execution investigation with normal/explicit-commit/squash merging and truthful conflict/failure states. Production issue 015 keeps all dependencies and decision gates.

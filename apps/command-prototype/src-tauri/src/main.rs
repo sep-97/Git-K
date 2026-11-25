@@ -1,6 +1,10 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use serde::Serialize;
+#[cfg(any(feature = "desktop", test))]
+mod conflicts;
+#[cfg(any(feature = "desktop", test))]
+use conflicts::*;
 use std::{
     fs,
     io::{BufRead, BufReader},
@@ -23,7 +27,7 @@ struct Runtime {
     watch: Arc<AtomicBool>,
     mutation: Arc<Mutex<()>>,
 }
-struct GitOutput { status: std::process::ExitStatus, stdout: String, stderr: String }
+struct GitOutput { status: std::process::ExitStatus, stdout: String, stderr: String, #[cfg(any(feature = "desktop", test))] stdout_bytes: Vec<u8> }
 impl GitOutput {
     fn error(&self) -> String {
         let error = self.stderr.trim();
@@ -42,6 +46,9 @@ impl Runtime {
         if output.status.success() { Ok(output.stdout) } else { Err(output.error()) }
     }
     fn git_output(&self, cwd: &Path, args: &[&str]) -> Result<GitOutput, String> {
+        self.git_output_with_capture(cwd, args, true)
+    }
+    fn git_output_with_capture(&self, cwd: &Path, args: &[&str], journal_stdout: bool) -> Result<GitOutput, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let executable = std::env::var_os("GIT_K_GIT").unwrap_or_else(|| "git".into());
         let mut effective_args = vec!["--no-pager"];
@@ -78,7 +85,7 @@ impl Runtime {
                 let mut bytes = Vec::new();
                 match reader.read_until(b'\n', &mut bytes) {
                     Ok(0) => break,
-                    Ok(_) => { first.event(id, "stdout", String::from_utf8_lossy(&bytes).into_owned()); collected.extend(bytes); },
+                    Ok(_) => { if journal_stdout { first.event(id, "stdout", String::from_utf8_lossy(&bytes).into_owned()); } collected.extend(bytes); },
                     Err(error) => { first.event(id, "stderr", format!("Output read error: {error}")); break; }
                 }
             }
@@ -102,8 +109,9 @@ impl Runtime {
             Ok(status) => status,
             Err(error) => { self.event(id, "failed", error.clone()); return Err(error); }
         };
+        if !journal_stdout { self.event(id, "stdout", format!("{} bytes read for conflict preview (contents omitted)", out.len())); }
         self.event(id, if result.success() { "completed" } else { "failed" }, format!("exit {} · {} ms", result.code().map(|v| v.to_string()).unwrap_or_else(|| "interrupted".into()), now() - started));
-        Ok(GitOutput { status: result, stdout: String::from_utf8_lossy(&out).into_owned(), stderr: String::from_utf8_lossy(&err).into_owned() })
+        Ok(GitOutput { status: result, stdout: String::from_utf8_lossy(&out).into_owned(), stderr: String::from_utf8_lossy(&err).into_owned(), #[cfg(any(feature = "desktop", test))] stdout_bytes: out })
     }
 }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 }
@@ -248,6 +256,61 @@ fn execute_merge(runtime: Runtime, request: MergeRequest) -> Result<CommitOutcom
 async fn merge_branch(runtime: tauri::State<'_, Runtime>, request: MergeRequest) -> Result<CommitOutcome, String> {
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || execute_merge(runtime, request)).await.map_err(|e| e.to_string())?
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn inspect_conflict(
+    runtime: tauri::State<'_, Runtime>,
+    identity: MergeIdentity,
+    file: String,
+) -> Result<ConflictView, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || read_conflict(&runtime, &identity, &file))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn apply_conflict(
+    runtime: tauri::State<'_, Runtime>,
+    identity: MergeIdentity,
+    file: String,
+    revision: String,
+    action: String,
+    value: Option<String>,
+) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_conflict(runtime, identity, file, revision, action, value)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn review_pending_merge(
+    runtime: tauri::State<'_, Runtime>,
+    identity: MergeIdentity,
+) -> Result<MergeReview, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || review_merge(&runtime, &identity))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn complete_pending_merge(
+    runtime: tauri::State<'_, Runtime>,
+    identity: MergeIdentity,
+    revision: String,
+) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || finish_merge(runtime, identity, revision))
+        .await
+        .map_err(|e| e.to_string())?
 }
 fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
     let status = runtime.git(path, &["status", "--porcelain=v1", "--untracked-files=all", "-z"])?;
@@ -662,7 +725,7 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
 #[cfg(feature = "desktop")]
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
-        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, merge_branch, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
+        .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, merge_branch, inspect_conflict, apply_conflict, review_pending_merge, complete_pending_merge, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }
 

@@ -13,3 +13,19 @@
 
 .detached-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 20px;background:#352d22;border-bottom:1px solid #665337;color:#e6c58b;font-size:11px;flex-shrink:0}.detached-banner>div{min-width:0}.detached-banner strong,.detached-banner span{display:block;overflow-wrap:anywhere;line-height:1.6}.detached-banner code{font-size:10px}.detached-banner button{flex-shrink:0;font-size:11px}
 .branch-dialog select{width:100%;background:#10151e;color:#d9dfeb;border:1px solid #47516a;border-radius:5px;padding:10px;font-size:12px}.branch-dialog select:focus-visible{outline:2px solid #aa96ff;outline-offset:2px}
+
+.merge-banner-actions,.conflict-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.conflict-dialog{width:min(960px,94vw)}
+.conflict-heading{justify-content:space-between;margin-bottom:12px}
+.conflict-heading h2{margin:0;overflow-wrap:anywhere}
+.conflict-editor{display:grid;gap:9px;font-size:12px}
+.conflict-editor label{margin:0}
+.conflict-tools label{display:flex;align-items:center;gap:8px;min-width:0}
+.conflict-tools input,.conflict-tools select{max-width:min(45vw,300px)}
+.conflict-sides{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.conflict-sides section,.merge-review-text{background:#10151e;border:1px solid #47516a;border-radius:5px;padding:9px}
+.conflict-sides h3{margin:0;font-size:12px}
+.conflict-sides pre,.merge-review-text{font:12px/1.5 Consolas,monospace;max-height:150px;overflow:auto}
+.merge-review-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.conflict-editor textarea{font:12px/1.55 Consolas,monospace;max-height:40vh}
+.conflict-editor small{color:#a1afc5}
