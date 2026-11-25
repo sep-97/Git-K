@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import './style.css';
+import { ConflictEditor, type ConflictView, type MergeIdentity, type MergeReview, type Resolution } from './ConflictEditor';
 
 type Commit = { sha: string; parents: string[]; subject: string; author: string; age: string; refs: string };
 type FileChange = { path: string; state: string; previous: string | null };
@@ -66,7 +67,7 @@ function Diff({ text }: { text: string }) {
   return <div className="diff-code">{lines.slice(0, 600).map((line, index) => <div className={`code-line ${line.startsWith('+') && !line.startsWith('+++') ? 'addition' : line.startsWith('-') && !line.startsWith('---') ? 'deletion' : line.startsWith('@@') ? 'hunk' : ''}`} key={index}><span className="line-number">{index + 1}</span><span>{line || ' '}</span></div>)}{lines.length > 600 && <div className="preview-limit">Preview shows the first 600 lines. Captured command output remains in this session's action history.</div>}</div>;
 }
 function isConflict(file: FileChange) { return ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(file.state); }
-function Changes({ files, selected, busy, onSelect, onChange }: { files: FileChange[]; selected: string; busy: boolean; onSelect: (file: FileChange, side: Side) => void; onChange: (file: FileChange | null, stage: boolean) => void }) {
+function Changes({ files, selected, busy, onSelect, onChange, onConflict }: { files: FileChange[]; onConflict?: (file: string) => void; selected: string; busy: boolean; onSelect: (file: FileChange, side: Side) => void; onChange: (file: FileChange | null, stage: boolean) => void }) {
   const conflicts = files.filter(isConflict);
   const staged = files.filter(file => !isConflict(file) && file.state !== '??' && file.state[0] !== ' ');
   const unstaged = files.filter(file => !isConflict(file) && (file.state === '??' || file.state[1] !== ' '));
@@ -78,7 +79,7 @@ function Changes({ files, selected, busy, onSelect, onChange }: { files: FileCha
       <button className="file-action" disabled={busy || !!conflicts.length} onClick={() => onChange(file, side === 'unstaged')} aria-label={`${side === 'staged' ? 'Unstage' : 'Stage'} ${file.path}`}>{side === 'staged' ? 'Unstage' : 'Stage'}</button>
     </div>)}
   </section>;
-  return <div className="changes-list"><div className="changes-summary">Staging updates Git's index. Your working files stay in place.</div>{!!conflicts.length && <div className="conflict-notice">{conflicts.length} unresolved conflict(s). Staging controls are unavailable in this prototype until conflicts are resolved.{conflicts.map(file => <button key={file.path} disabled={busy} onClick={() => onSelect(file, 'unstaged')}>{file.path}</button>)}</div>}{group('unstaged', unstaged)}{group('staged', staged)}</div>;
+  return <div className="changes-list"><div className="changes-summary">Staging updates Git's index. Your working files stay in place.</div>{!!conflicts.length && <div className="conflict-notice">{conflicts.length} unresolved conflict(s). {onConflict ? 'Select a file to resolve it.' : 'Use Git to resolve this operation, then refresh.'}{conflicts.map(file => <button key={file.path} disabled={busy} onClick={() => onConflict ? onConflict(file.path) : onSelect(file, 'unstaged')}>{file.path}</button>)}</div>}{group('unstaged', unstaged)}{group('staged', staged)}</div>;
 }
 function App() {
   const [repo, setRepo] = useState<Snapshot | null>(null);
@@ -110,6 +111,19 @@ function App() {
   const [mergeDraft, setMergeDraft] = useState<MergeDraft | null>(null);
   const [mergeError, setMergeError] = useState('');
   const mergeDialog = useRef<HTMLDialogElement>(null);
+  const [resolution, setResolution] = useState<{ identity: MergeIdentity; file: string; view: ConflictView | null } | null>(null);
+  const [finish, setFinish] = useState<{ identity: MergeIdentity; review: MergeReview | null } | null>(null);
+  const [conflictError, setConflictError] = useState('');
+  const resolutionDialog = useRef<HTMLDialogElement>(null);
+  const finishDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (resolution) resolutionDialog.current?.showModal();
+    else resolutionDialog.current?.close();
+  }, [!!resolution]);
+  useEffect(() => {
+    if (finish) finishDialog.current?.showModal();
+    else finishDialog.current?.close();
+  }, [!!finish]);
   const draftPath = useRef('');
   const cursor = useRef(0);
   const selectionEpoch = useRef(0);
@@ -143,7 +157,7 @@ function App() {
     try {
       const data = await invoke<Snapshot>('open_repository', { path: value });
       if (draftPath.current !== data.path) { setSummary(''); setDescription(''); setAmend(null); draftPath.current = data.path; }
-      setRepo(data); setPath(data.path); setSelected(''); setScope('Real output from the selected repository'); setTitle('Repository opened'); setDetail('Select a commit or a changed file. Every Git command is recorded in the activity panel below.');
+      setRepo(data); setPath(data.path); if (data.merge_head) setTab('changes'); setSelected(''); setScope('Real output from the selected repository'); setTitle('Repository opened'); setDetail('Select a commit or a changed file. Every Git command is recorded in the activity panel below.');
     }
     catch (e) { setError(String(e)); }
     finally { setBusy(''); }
@@ -238,6 +252,60 @@ function App() {
     setRefDraft(null); setMergeError('');
     const label = source?.name ?? commit?.subject ?? 'Pending merge';
     setMergeDraft({ path: repo.path, head: repo.head, branch: repo.branch, target: abort ? repo.merge_head : source?.oid ?? commit!.sha, source: source?.name ?? null, label, mode: 'normal', message: `Merge ${source?.name ?? commit?.sha.slice(0, 7) ?? ''} into ${repo.branch}`, abort });
+  }
+  function pendingIdentity(): MergeIdentity | null {
+    if (!repo?.merge_head) return null;
+    return { path: repo.path, head: repo.head, branch: repo.branch, merge: repo.merge_head };
+  }
+  async function openConflict(file: string) {
+    const identity = pendingIdentity();
+    if (!identity || busy) return;
+    setConflictError(''); setError(''); setBusy('Reading conflict…');
+    setResolution({ identity, file, view: null });
+    try {
+      const view = await invoke<ConflictView>('inspect_conflict', { identity, file });
+      setResolution({ identity, file, view });
+    } catch (e) { setConflictError(String(e)); }
+    finally { setBusy(''); }
+  }
+  async function openFinish() {
+    const identity = pendingIdentity();
+    if (!identity || busy || hasConflicts) return;
+    setConflictError(''); setError(''); setBusy('Reviewing staged merge…');
+    setFinish({ identity, review: null });
+    try {
+      const review = await invoke<MergeReview>('review_pending_merge', { identity });
+      setFinish({ identity, review });
+    } catch (e) { setConflictError(String(e)); }
+    finally { setBusy(''); }
+  }
+  async function applyMergeStep(action?: Resolution, value?: string) {
+    const identity = action ? resolution?.identity : finish?.identity;
+    const revision = action ? resolution?.view?.revision : finish?.review?.revision;
+    if (!identity || !revision || busy) return;
+    setBusy(action ? 'Resolving conflict…' : 'Creating merge commit…'); setConflictError(''); setError(''); setNotice('');
+    selectionEpoch.current++;
+    try {
+      const outcome = await invoke<CommitOutcome>(action ? 'apply_conflict' : 'complete_pending_merge', action
+        ? { identity, file: resolution!.file, revision, action, value: value ?? null }
+        : { identity, revision });
+      const unresolved = outcome.snapshot?.files.some(file => isConflict(file) && file.path === resolution?.file);
+      setResolution(null); setFinish(null); setRepo(outcome.snapshot); setSelected('');
+      setTitle(action ? 'Conflict resolution' : 'Merge completed'); setScope('Actual Git result');
+      setDetail(outcome.output || 'Inspect the recorded Git commands in Action history.');
+      if (outcome.refresh_error) setError(`Git completed the action, but refreshing failed: ${outcome.refresh_error}. Reopen the repository before trying another action.`);
+      else if (unresolved) setError('Git left this file unresolved. Review the working file and Git output before trying again.');
+      else setNotice(action ? 'Resolution staged. Review the remaining changes.' : 'Git created the merge commit.');
+    } catch (e) {
+      setConflictError(String(e));
+      try {
+        const state = await invoke<Snapshot>('open_repository', { path: identity.path });
+        setRepo(state);
+        if (state.merge_head !== identity.merge || state.head !== identity.head || state.branch !== identity.branch) {
+          setResolution(null); setFinish(null); setError(String(e));
+        }
+      } catch (refresh) { setConflictError(`${String(e)}. Refresh failed: ${String(refresh)}`); }
+    } finally { setBusy(''); }
   }
   async function mergeBranch() {
     if (!repo || !mergeDraft || busy || amend || staleMerge) return;
@@ -348,7 +416,7 @@ function App() {
     {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss message"><Icon name="close" size={14}/></button></div>}
     {notice && <div className="notice-banner" role="status"><Icon name="check" size={15}/><span>{notice}</span></div>}
     {repo?.branch === 'Detached HEAD' && <div className="detached-banner" role="note"><div><strong>Detached HEAD · <code>{repo.head}</code></strong><span>New commits are not attached to a branch. Create a branch at this HEAD to keep them reachable. Save this commit ID before leaving; reflog recovery is temporary.</span></div><button disabled={!!busy || !!amend || hasConflicts} onClick={() => beginBranch()}>Create branch at HEAD</button></div>}
-    {repo?.merge_head && <div className="detached-banner" role="status"><div><strong>Merge in progress on {repo.branch}</strong><span>Resolve with your Git tools and refresh, or abort this merge. The conflict editor and merge continuation workflow are not available yet.</span><code>{repo.merge_head}</code></div><button disabled={!!busy || !!amend} onClick={() => beginMerge(undefined, undefined, true)}>Abort merge…</button></div>}
+    {repo?.merge_head && <div className="detached-banner" role="status"><div><strong>Merge in progress on {repo.branch}</strong><span>{hasConflicts ? 'Open an unresolved file to review and stage its resolution.' : 'Review the staged result and finish the merge.'}</span><code>{repo.merge_head}</code></div><div className="merge-banner-actions"><button disabled={!!busy || !!amend || hasConflicts} onClick={() => void openFinish()}>Finish merge…</button><button disabled={!!busy || !!amend} onClick={() => beginMerge(undefined, undefined, true)}>Abort merge…</button></div></div>}
     <div className="workspace">
       <aside className="sidebar"><div className="sidebar-repo"><div className="repo-avatar">{repoName.slice(0, 1).toUpperCase()}</div><div><strong>{repoName}</strong><small>{repo ? 'Repository connected' : 'Open a folder to begin'}</small></div></div><div className="section-label">WORKSPACE</div><button className={`side-action ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}><Icon name="history"/>Commit history<span>{repo?.commits.length || 0}</span></button><button className={`side-action ${tab === 'changes' ? 'active' : ''}`} onClick={() => setTab('changes')}><Icon name="file"/>Working changes<span>{repo?.files.length || 0}</span></button><div className="section-label">LOCAL BRANCHES <span>{repo?.branches.length || 0}</span></div>
         <button className="new-branch" disabled={!repo?.head || !!busy || !!amend || hasConflicts} onClick={() => beginBranch()}><Icon name="branch" size={14}/>New branch</button>
@@ -357,12 +425,12 @@ function App() {
         <div className="section-label">LOCAL TAGS <span>{repo?.tags.length || 0}</span></div>
         <button className="new-branch" disabled={!repo?.head || !!busy || !!amend || hasConflicts} onClick={() => beginRef('create-tag')}>New tag</button>
         {repo?.tags.map(tag => <div className="tag-item" key={tag.name}><button className="tag-select" aria-label={`Inspect tag ${tag.name}`} disabled={!!busy} onClick={() => void inspectTag(tag)} title={`${tag.name} · ${tag.oid}`}><span>{tag.name}</span><small>{tag.kind === 'tag' ? 'annotated' : tag.kind}</small></button><button aria-label={`Delete local tag ${tag.name}`} disabled={!!busy || !!amend || hasConflicts} onClick={() => beginRef('delete-tag', tag)}>×</button></div>)}<div className="sidebar-bottom"><div className="section-label">THIS BUILD</div><p>Real repository data.<br/>Stage, unstage and commit.<br/>In-memory action history.</p><small>Prototype only. Remote actions and interactive shells are not implemented.</small></div></aside>
-      <main className={`main-panel ${repo && tab === 'changes' ? 'changes-mode' : ''}`}><div className="panel-heading"><div><h1>{tab === 'history' ? 'Commit history' : 'Working changes'}</h1><span>{repo?.branch ? <><Icon name="branch" size={13}/>{repo.branch}</> : 'Choose a repository'}</span></div><div className="count-pill">{tab === 'history' ? `${repo?.commits.length || 0} loaded` : `${repo?.files.length || 0} changes`}</div></div>{busy && <div className="loading-line">{busy}</div>}{repo ? tab === 'history' ? <Graph commits={repo.commits} selected={selected} onSelect={commit => void inspectCommit(commit)}/> : <><Changes files={repo.files} selected={selected} busy={!!busy} onSelect={(file, side) => void inspectFile(file, side)} onChange={(file, stage) => void changeIndex(file, stage)}/><form className={`commit-composer ${amend ? 'amending' : ''}`} onSubmit={event => { event.preventDefault(); void commitStaged(); }} onKeyDown={event => { if (event.key === 'Escape' && amend) { event.preventDefault(); cancelAmend(); } }} aria-label={amend ? 'Amend latest commit' : 'Create commit'}>
+      <main className={`main-panel ${repo && tab === 'changes' ? 'changes-mode' : ''}`}><div className="panel-heading"><div><h1>{tab === 'history' ? 'Commit history' : 'Working changes'}</h1><span>{repo?.branch ? <><Icon name="branch" size={13}/>{repo.branch}</> : 'Choose a repository'}</span></div><div className="count-pill">{tab === 'history' ? `${repo?.commits.length || 0} loaded` : `${repo?.files.length || 0} changes`}</div></div>{busy && <div className="loading-line">{busy}</div>}{repo ? tab === 'history' ? <Graph commits={repo.commits} selected={selected} onSelect={commit => void inspectCommit(commit)}/> : <><Changes files={repo.files} selected={selected} busy={!!busy} onSelect={(file, side) => void inspectFile(file, side)} onChange={(file, stage) => void changeIndex(file, stage)} onConflict={repo.merge_head ? file => void openConflict(file) : undefined}/><form className={`commit-composer ${amend ? 'amending' : ''}`} onSubmit={event => { event.preventDefault(); void commitStaged(); }} onKeyDown={event => { if (event.key === 'Escape' && amend) { event.preventDefault(); cancelAmend(); } }} aria-label={amend ? 'Amend latest commit' : 'Create commit'}>
           <div className="composer-heading"><strong>{amend ? 'Amend latest commit' : 'New commit'}</strong><span>{stagedCount} staged file{stagedCount === 1 ? '' : 's'}</span>{!amend && <button type="button" disabled={!!busy || !repo.head || hasConflicts || !!repo.merge_head} onClick={() => void beginAmend()}>Amend latest</button>}</div>
           {amend && <div className="amend-warning" role="note"><strong>Replacing {amend.head.slice(0, 7)} on {amend.branch}.</strong> This rewrites history, including if already pushed. Coordinate shared history before updating. Includes any staged changes; unstaged files stay in place.{staleAmend && <strong className="stale-amend">Branch or HEAD changed. Cancel amend and review the repository before starting again.</strong>}</div>}
           <input ref={summaryInput} aria-label="Commit summary" placeholder="Commit summary (required)" value={summary} disabled={!!busy} onChange={event => setSummary(event.target.value)}/>
           <textarea aria-label="Commit description" placeholder="Description (optional)" rows={2} value={description} disabled={!!busy} onChange={event => setDescription(event.target.value)}/>
-          <div className="composer-actions"><small>{repo.merge_head ? 'Finish the merge with your Git tools, or abort it above.' : hasConflicts ? 'Resolve conflicts before committing.' : amend ? 'Keeps the original author. Uses configured hooks and signing.' : stagedCount ? 'Uses configured identity, hooks and signing.' : 'Stage a file to create a commit.'}</small><div className="composer-buttons">{amend && <button type="button" disabled={!!busy} onClick={cancelAmend}>Cancel amend</button>}<button className="accent-button" type="submit" disabled={!!busy || (!amend && !stagedCount) || hasConflicts || !!repo.merge_head || staleAmend || !summary.trim()}><Icon name="check" size={14}/>{amend ? 'Update latest commit' : 'Commit staged'}</button></div></div>
+          <div className="composer-actions"><small>{repo.merge_head ? 'Use Finish merge to commit the staged resolution.' : hasConflicts ? 'Resolve conflicts before committing.' : amend ? 'Keeps the original author. Uses configured hooks and signing.' : stagedCount ? 'Uses configured identity, hooks and signing.' : 'Stage a file to create a commit.'}</small><div className="composer-buttons">{amend && <button type="button" disabled={!!busy} onClick={cancelAmend}>Cancel amend</button>}<button className="accent-button" type="submit" disabled={!!busy || (!amend && !stagedCount) || hasConflicts || !!repo.merge_head || staleAmend || !summary.trim()}><Icon name="check" size={14}/>{amend ? 'Update latest commit' : 'Commit staged'}</button></div></div>
         </form></> : <div className="empty"><div className="empty-icon"><Icon name="branch" size={34}/></div><h2>A clear view of your Git work</h2><p>Open an existing repository, or create a disposable demo to explore branches, changes and recorded commands.</p><button className="accent-button" onClick={() => void demo()} disabled={!!busy}>Create demo workspace</button></div>}</main>
       <section className="detail-panel"><div className="detail-heading"><span className="eyebrow">INSPECTOR</span><h2 title={title}>{title}</h2><small>{scope}</small>{selectedCommit && <div className="reference-shortcuts"><button className="branch-from-commit" disabled={cannotMerge || selectedCommit.sha === repo?.head} title={cannotMerge ? 'Check out a branch and clear tracked changes or pending operations before merging.' : 'Merge this commit into the current branch'} onClick={() => beginMerge(undefined, selectedCommit)}>Merge into {repo?.branch}…</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts || (repo?.branch === 'Detached HEAD' && selectedCommit.sha === repo.head)} onClick={() => beginRef('checkout-commit', undefined, selectedCommit)}>Check out commit…</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginBranch(selectedCommit)}><Icon name="branch" size={13}/>Create branch here</button><button className="branch-from-commit" disabled={!!busy || !!amend || hasConflicts} onClick={() => beginRef('create-tag', undefined, selectedCommit)}>Create tag here</button></div>}</div><Diff text={detail}/></section>
     </div>
@@ -395,6 +463,22 @@ function App() {
         {refDraft.action === 'rename-branch' && refDraft.original !== repo?.branch && <button type="button" disabled={cannotMerge || staleRef} onClick={() => beginMerge({ name: refDraft.original, oid: refDraft.oid, kind: 'commit' })}>Merge into {repo?.branch}…</button>}
         <div className="branch-dialog-actions">{refDraft.action === 'rename-branch' && <button type="button" className="delete-link" disabled={!!busy || refDraft.original === repo?.branch || staleRef} onClick={() => { setRefError(''); setRefDraft({ ...refDraft, action: 'delete-branch' }); }}>Delete branch…</button>}<button type="button" disabled={!!busy} onClick={() => setRefDraft(null)}>Cancel</button><button type="submit" className={refDeleting ? 'danger-button' : 'accent-button'} disabled={!!busy || staleRef || (refNeedsName && !refDraft.name.trim()) || (refDraft.action === 'rename-branch' && refDraft.name === refDraft.original) || (refDraft.action === 'create-tag' && refDraft.annotated && !refDraft.message.trim())}>{busy ? 'Working…' : refDraft.action === 'checkout-commit' ? 'Check out detached HEAD' : refDraft.action === 'rename-branch' ? 'Rename branch' : refDraft.action === 'create-tag' ? 'Create tag' : refDraft.action === 'delete-tag' ? 'Delete local tag' : 'Delete local branch'}</button></div>
       </form>}
+    </dialog>
+    <dialog ref={resolutionDialog} className="branch-dialog conflict-dialog" onCancel={event => { event.preventDefault(); if (!busy) setResolution(null); }} aria-labelledby="conflict-title">
+      {resolution && <><div className="conflict-tools conflict-heading"><h2 id="conflict-title">Resolve {resolution.file}</h2><button autoFocus disabled={!!busy} onClick={() => setResolution(null)}>Close editor</button></div>
+        {busy && <p role="status">{busy}</p>}
+        {conflictError && <div className="branch-dialog-error" role="alert">{conflictError} <button disabled={!!busy} onClick={() => void openConflict(resolution.file)}>Reload conflict</button></div>}
+        {resolution.view && <ConflictEditor key={`${resolution.file}:${resolution.view.revision}`} view={resolution.view} paths={repo?.files.filter(isConflict).map(file => file.path) ?? []} busy={!!busy} onOpen={file => void openConflict(file)} onResolve={(action, value) => void applyMergeStep(action, value)}/>}
+      </>}
+    </dialog>
+    <dialog ref={finishDialog} className="branch-dialog" onCancel={event => { event.preventDefault(); if (!busy) setFinish(null); }} aria-labelledby="finish-title">
+      {finish && <><h2 id="finish-title">Finish merge into {finish.identity.branch}</h2>
+        <p>Incoming commit <code>{finish.identity.merge}</code></p>
+        {busy && <p role="status">{busy}</p>}
+        {finish.review && <><h3>Staged changes</h3><pre className="merge-review-text">{finish.review.summary || 'No file changes relative to current HEAD.'}</pre><h3>Pending merge message</h3><pre className="merge-review-text">{finish.review.message}</pre><p>Git uses the configured hooks and signing. Unstaged changes stay outside the commit.</p></>}
+        {conflictError && <p className="branch-dialog-error" role="alert">{conflictError}</p>}
+        <div className="branch-dialog-actions"><button autoFocus disabled={!!busy} onClick={() => setFinish(null)}>Cancel</button><button className="accent-button" disabled={!!busy || !finish.review || hasConflicts} onClick={() => void applyMergeStep()}>Create merge commit</button></div>
+      </>}
     </dialog>
     <dialog ref={mergeDialog} className="branch-dialog" onCancel={event => { event.preventDefault(); if (!busy) setMergeDraft(null); }} aria-labelledby="merge-dialog-title">
       {mergeDraft && <form onSubmit={event => { event.preventDefault(); void mergeBranch(); }}>

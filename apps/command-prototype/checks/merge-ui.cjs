@@ -33,7 +33,7 @@ async function run() {
           state: { path: '/merge-ui-fixture', branch: kind === 'detached' ? 'Detached HEAD' : 'main', head, merge_head: '', files: kind === 'dirty' ? [{ path: 'draft.txt', state: ' M', previous: null }] : [],
             commits: [{ sha: incoming, parents: [head], subject: 'Incoming topic', author: 'Fixture', age: 'now', refs: 'topic&literal' }, { sha: head, parents: [], subject: 'Current history', author: 'Fixture', age: 'now', refs: 'main' }],
             branches: [{ name: 'main', oid: head, kind: 'commit' }, { name: 'topic&literal', oid: incoming, kind: 'commit' }], tags: [] },
-          requests: [], behavior: kind, panel: [],
+          requests: [], steps: [], behavior: kind, panel: [],
         };
         window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
           const fixture = window.mergeFixture;
@@ -42,11 +42,29 @@ async function run() {
           if (command === 'record_interface') { fixture.panel.push(args.action); return; }
           if (command === 'inspect_commit') return 'Explicit UI fixture commit details';
           if (command === 'open_repository') return structuredClone(fixture.state);
+          if (command === 'inspect_conflict') {
+            const file = args.file;
+            if (file === 'binary.dat') return { file, revision: 'binary-1', current_exists: true, incoming_exists: true, current: null, incoming: null, output: null, marker_size: 7, external_tool: 'fixture', can_take_side: true };
+            return { file, revision: 'text-1', current_exists: true, incoming_exists: true, current: 'current', incoming: 'incoming', output: 'header\n<<<<<<< HEAD\ncurrent\n||||||| base\noriginal\n=======\nincoming\n>>>>>>> topic\nfooter\n', marker_size: 7, external_tool: null, can_take_side: true };
+          }
+          if (command === 'review_pending_merge') return { revision: 'index-1', summary: 'file.txt | 1 +', message: 'Merge fixture' };
+          if (command === 'apply_conflict' || command === 'complete_pending_merge') {
+            fixture.steps.push(structuredClone(args));
+            if (command === 'apply_conflict') {
+              if (args.value === 'fail') throw 'Fixture index lock';
+              fixture.state.files = fixture.state.files.filter(file => file.path !== args.file);
+            } else {
+              fixture.state.merge_head = ''; fixture.state.head = 'd'.repeat(40);
+            }
+            return { output: 'Fixture Git result', snapshot: structuredClone(fixture.state), refresh_error: null };
+          }
           if (command !== 'merge_branch') throw `Unexpected fixture command: ${command}`;
           const request = args.request; fixture.requests.push(structuredClone(request));
           if (request.abort) { fixture.state.merge_head = ''; fixture.state.files = []; }
-          else if (fixture.behavior === 'conflict') {
-            fixture.state.merge_head = request.target; fixture.state.files = [{ path: 'file.txt', state: 'UU', previous: null }]; throw 'Fixture merge conflict';
+          else if (['conflict', 'resolve'].includes(fixture.behavior)) {
+            fixture.state.merge_head = request.target; fixture.state.files = [{ path: 'file.txt', state: 'UU', previous: null }];
+            if (fixture.behavior === 'resolve') fixture.state.files.push({ path: 'binary.dat', state: 'UU', previous: null });
+            throw 'Fixture merge conflict';
           } else if (fixture.behavior === 'stale') { fixture.state.head = 'c'.repeat(40); throw 'Fixture source changed'; }
           else if (request.mode === 'squash') { fixture.state.files = [{ path: 'topic.txt', state: 'A ', previous: null }]; }
           else { fixture.state.head = request.target; }
@@ -106,6 +124,54 @@ async function run() {
     const abort = await page.evaluate(() => window.mergeFixture.requests[1]); assert.equal(abort.abort, true); assert.equal(abort.target, 'b'.repeat(40));
     await page.close();
 
+    page = await pageFor('resolve');
+    await page.getByRole('button', { name: /Action history/ }).click();
+    await openGraphMerge(page);
+    await mergeDialog(page).getByRole('button', { name: 'Merge', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Finish merge…' }).isDisabled(), true);
+    await page.getByRole('button', { name: 'file.txt', exact: true }).click();
+    let editor = page.getByRole('dialog', { name: 'Resolve file.txt' });
+    await editor.getByRole('region', { name: 'Current version' }).getByText('current', { exact: true }).waitFor();
+    await editor.getByRole('region', { name: 'Incoming version' }).getByText('incoming', { exact: true }).waitFor();
+    await editor.getByRole('button', { name: 'Next file' }).click();
+    editor = page.getByRole('dialog', { name: 'Resolve binary.dat' });
+    await editor.getByText('Text editing is unavailable', { exact: false }).waitFor();
+    await editor.getByRole('button', { name: 'Open external tool…' }).click();
+    await editor.getByRole('button', { name: 'Cancel action' }).click();
+    await editor.getByRole('button', { name: 'Take incoming file' }).click();
+    await editor.getByRole('button', { name: 'Apply resolution' }).click();
+    await page.getByRole('button', { name: 'file.txt', exact: true }).click();
+    editor = page.getByRole('dialog', { name: 'Resolve file.txt' });
+    await editor.getByRole('textbox', { name: 'Search output' }).fill('footer');
+    await editor.getByRole('button', { name: 'Find next' }).click();
+    await editor.getByText(/Match on line/).waitFor();
+    const editorOutput = editor.getByRole('textbox', { name: 'Output', exact: true });
+    assert.equal(await editorOutput.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), 'footer');
+    await editor.getByRole('button', { name: 'Next block' }).click();
+    assert.match(await editorOutput.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), /<<<<<<< HEAD/);
+    await editor.getByRole('button', { name: 'Use current block' }).click();
+    assert.equal(await editorOutput.inputValue(), 'header\ncurrent\nfooter\n');
+    await editorOutput.fill('fail');
+    await editor.getByRole('button', { name: 'Save and stage output' }).click();
+    await editor.getByRole('alert').filter({ hasText: 'Fixture index lock' }).waitFor();
+    assert.equal(await editorOutput.inputValue(), 'fail');
+    await editorOutput.fill('header\ncombined\nfooter\n');
+    await editor.getByRole('button', { name: 'Save and stage output' }).click();
+    await page.getByRole('button', { name: 'Finish merge…' }).click();
+    const finish = page.getByRole('dialog', { name: 'Finish merge into main' });
+    await finish.getByText('Merge fixture', { exact: true }).waitFor();
+    await finish.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: 'Finish merge…' }).click();
+    await finish.getByRole('button', { name: 'Create merge commit' }).click();
+    await page.getByRole('status').filter({ hasText: 'Git created the merge commit.' }).waitFor();
+    const steps = await page.evaluate(() => window.mergeFixture.steps);
+    assert.deepEqual(steps.map(step => [step.file, step.action, step.revision, step.value]), [
+      ['binary.dat', 'incoming', 'binary-1', null], ['file.txt', 'edit', 'text-1', 'fail'],
+      ['file.txt', 'edit', 'text-1', 'header\ncombined\nfooter\n'], [undefined, undefined, 'index-1', undefined],
+    ]);
+    assert.deepEqual(await page.evaluate(() => window.mergeFixture.panel), ['Activity panel collapsed']);
+    await page.close();
+
     page = await pageFor('stale'); await openGraphMerge(page);
     await mergeDialog(page).getByRole('button', { name: 'Merge', exact: true }).click();
     await mergeDialog(page).getByRole('alert').filter({ hasText: 'Cancel and review refreshed state' }).waitFor();
@@ -125,7 +191,7 @@ async function run() {
       await page.close();
     }
     assert.deepEqual(errors, []);
-    console.log('Merge UI checks passed: graph and branch entry points, Cancel/Escape, reviewed arguments, collapsed panel, squash/draft preservation, conflicts/abort, stale reviews, failed refresh and disabled states. IPC was stubbed; this is not native workflow evidence.');
+    console.log('Merge UI checks passed: graph and branch entry points, Cancel/Escape, reviewed arguments, collapsed panel, squash/draft preservation, conflict editing/continuation/abort, stale reviews, failed refresh and disabled states. IPC was stubbed; this is not native workflow evidence.');
   } finally {
     if (browser) await browser.close();
     server.kill();

@@ -358,3 +358,6 @@ fn detached_checkout_rejects_noncommit_objects_and_moved_head() {
 
 #[path = "merge_tests.rs"]
 mod merge_tests;
+
+#[path = "conflict_tests.rs"]
+mod conflict_tests;

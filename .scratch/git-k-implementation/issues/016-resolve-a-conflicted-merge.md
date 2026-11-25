@@ -19,6 +19,10 @@ Verification gates: [G7: Matching reference build and feature access](../../gitk
 
 Spec: [Full-parity implementation specification](../spec.md). Confirmed requirements and unresolved decision gates take precedence over proposed details.
 
+## Prototype evidence
+
+The execution prototype covers the three-pane editor, file and block navigation, search, manual and whole-file resolutions, a Git-configured external tool and reviewed merge continuation. Headless real-Git and Chromium checks passed. Native validation, production dependencies and reference observation are pending. [Conflict workflow evidence](../../../apps/command-prototype/CONFLICTS.md)
+
 ## Acceptance criteria
 
 - [ ] Test conflict navigation/search, unresolved paths, binary conflicts and saved output before committing.
