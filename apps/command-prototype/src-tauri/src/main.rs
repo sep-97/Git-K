@@ -187,7 +187,7 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     let tags = local_refs(&runtime, &path, "refs/tags/")?;
     let head = runtime.git(&path, &["rev-parse", "--revs-only", "HEAD"])?;
     let commits = if !head.trim().is_empty() {
-        let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D"])?;
+        let history = runtime.git(&path, &["log", "--all", "--date-order", "-n", "60", "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ar%x1f%D", "HEAD", "--"])?;
         history.lines().filter_map(|line| {
             let fields: Vec<_> = line.split('\x1f').collect();
             if fields.len() != 6 { return None; }
@@ -414,7 +414,7 @@ fn execute_ref_action(runtime: Runtime, request: RefRequest) -> Result<CommitOut
                 let target = request.start_point.as_deref().filter(|oid| valid_oid(oid)).ok_or("Select an existing commit to check out.")?;
                 // Only immutable object IDs from the reviewed commit are accepted.
                 runtime.git(&root, &["cat-file", "-e", &format!("{target}^{{commit}}")])?;
-                runtime.git(&root, &["switch", "--detach", "--no-overwrite-ignore", "--no-recurse-submodules", "--", target])?
+                runtime.git(&root, &["switch", "--detach", "--no-guess", "--no-overwrite-ignore", "--no-recurse-submodules", "--", target])?
             }
             "rename-branch" | "delete-branch" | "delete-tag" => {
                 let original = request.original.as_deref().ok_or("Select a reference first.")?;
