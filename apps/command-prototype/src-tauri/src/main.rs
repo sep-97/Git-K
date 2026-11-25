@@ -6,10 +6,12 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex},
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(feature = "desktop")]
+use std::{sync::atomic::AtomicBool, time::Duration};
 
 #[derive(Clone, Serialize)]
 struct Event { seq: u64, operation: u64, timestamp: u64, kind: String, text: String }
@@ -17,6 +19,7 @@ struct Event { seq: u64, operation: u64, timestamp: u64, kind: String, text: Str
 struct Runtime {
     events: Arc<Mutex<Vec<Event>>>,
     next: Arc<AtomicU64>,
+    #[cfg(feature = "desktop")]
     watch: Arc<AtomicBool>,
     mutation: Arc<Mutex<()>>,
 }
@@ -159,6 +162,7 @@ fn changes(runtime: &Runtime, path: &Path) -> Result<Vec<FileChange>, String> {
     Ok(files)
 }
 fn conflicted(file: &FileChange) -> bool { ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].contains(&file.state.as_str()) }
+#[cfg(feature = "desktop")]
 fn pending(file: &FileChange, stage: bool) -> bool {
     if conflicted(file) { return false; }
     if stage { file.state == "??" || file.state.as_bytes()[1] != b' ' }
@@ -192,12 +196,14 @@ fn snapshot(runtime: Runtime, input: String) -> Result<Snapshot, String> {
     } else { Vec::new() };
     Ok(Snapshot { path: display_path(&path), branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, head: head.trim().into(), files, commits, branches, tags })
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn initial_path() -> String {
     if let Some(path) = std::env::args_os().nth(1) { return display_path(Path::new(&path)); }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     cwd.ancestors().find(|path| path.join(".git").exists()).map(display_path).unwrap_or_default()
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn record_interface(runtime: tauri::State<'_, Runtime>, action: String) -> Result<(), String> {
     match action.as_str() {
@@ -205,15 +211,18 @@ fn record_interface(runtime: tauri::State<'_, Runtime>, action: String) -> Resul
         _ => Err("Unsupported interface activity.".into())
     }
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn journal(runtime: tauri::State<'_, Runtime>, after: u64) -> Vec<Event> {
     runtime.events.lock().unwrap().iter().filter(|e| e.seq > after).take(1000).cloned().collect()
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn open_repository(runtime: tauri::State<'_, Runtime>, path: String) -> Result<Snapshot, String> {
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || snapshot(runtime, path)).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: String, side: String) -> Result<String, String> {
     let runtime = runtime.inner().clone();
@@ -237,6 +246,7 @@ async fn inspect_file(runtime: tauri::State<'_, Runtime>, path: String, file: St
         runtime.git(&root, &args)
     }).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Option<String>, stage: bool) -> Result<Snapshot, String> {
     let runtime = runtime.inner().clone();
@@ -274,6 +284,7 @@ async fn change_index(runtime: tauri::State<'_, Runtime>, path: String, file: Op
         snapshot(runtime.clone(), display_path(&root))
     }).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn latest_message(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String) -> Result<String, String> {
     let runtime = runtime.inner().clone();
@@ -299,11 +310,8 @@ fn commit_target(runtime: &Runtime, path: &str, expected_head: &str, expected_br
     if changes(runtime, &root)?.iter().any(conflicted) { return Err("Resolve repository conflicts before changing branches or committing.".into()); }
     Ok(root)
 }
-#[tauri::command]
-async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, summary: String, description: String, amend: bool) -> Result<CommitOutcome, String> {
-    let runtime = runtime.inner().clone();
-    let journal = runtime.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+fn execute_commit(runtime: Runtime, path: String, expected_head: String, expected_branch: String, summary: String, description: String, amend: bool) -> Result<CommitOutcome, String> {
+    let result = (|| {
         runtime.event(0, "local", if amend { "Requested update of the latest commit, including any staged changes." } else { "Requested commit of staged changes." });
         let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
         let summary = summary.trim();
@@ -324,15 +332,19 @@ async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expecte
             Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
             Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
         })
-    }).await.map_err(|e| e.to_string()).and_then(|result| result);
-    if let Err(error) = &result { journal.event(0, "local", format!("Commit did not complete: {error}")); }
+    })();
+    if let Err(error) = &result { runtime.event(0, "local", format!("Commit did not complete: {error}")); }
     result
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
-async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, name: String, start_point: Option<String>, checkout: bool) -> Result<CommitOutcome, String> {
+async fn create_commit(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, summary: String, description: String, amend: bool) -> Result<CommitOutcome, String> {
     let runtime = runtime.inner().clone();
-    let journal = runtime.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || execute_commit(runtime, path, expected_head, expected_branch, summary, description, amend)).await.map_err(|e| e.to_string())?
+}
+
+fn execute_branch(runtime: Runtime, path: String, expected_head: String, expected_branch: String, name: String, start_point: Option<String>, checkout: bool) -> Result<CommitOutcome, String> {
+    let result = (|| {
         runtime.event(0, "local", format!("Requested {} branch: {name}", if start_point.is_some() { "creation of" } else { "checkout of" }));
         let _guard = runtime.mutation.try_lock().map_err(|_| "Another repository change is still running.".to_string())?;
         let root = commit_target(&runtime, &path, &expected_head, &expected_branch)?;
@@ -358,10 +370,18 @@ async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expecte
             Ok(snapshot) => CommitOutcome { output, snapshot: Some(snapshot), refresh_error: None },
             Err(error) => CommitOutcome { output, snapshot: None, refresh_error: Some(error) },
         })
-    }).await.map_err(|e| e.to_string()).and_then(|result| result);
-    if let Err(error) = &result { journal.event(0, "local", format!("Branch action reported an error; repository state may have changed: {error}")); }
+    })();
+    if let Err(error) = &result { runtime.event(0, "local", format!("Branch action reported an error; repository state may have changed: {error}")); }
     result
 }
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn change_branch(runtime: tauri::State<'_, Runtime>, path: String, expected_head: String, expected_branch: String, name: String, start_point: Option<String>, checkout: bool) -> Result<CommitOutcome, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || execute_branch(runtime, path, expected_head, expected_branch, name, start_point, checkout)).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn inspect_tag(runtime: tauri::State<'_, Runtime>, path: String, oid: String) -> Result<String, String> {
     if !valid_oid(&oid) { return Err("Invalid tag object identifier.".into()); }
@@ -390,6 +410,12 @@ fn execute_ref_action(runtime: Runtime, request: RefRequest) -> Result<CommitOut
         runtime.event(0, "local", format!("Requested {}: {}", request.action, request.original.as_deref().unwrap_or(&request.name)));
         let root = commit_target(&runtime, &request.path, &request.expected_head, &request.expected_branch)?;
         let output = match request.action.as_str() {
+            "checkout-commit" => {
+                let target = request.start_point.as_deref().filter(|oid| valid_oid(oid)).ok_or("Select an existing commit to check out.")?;
+                // Only immutable object IDs from the reviewed commit are accepted.
+                runtime.git(&root, &["cat-file", "-e", &format!("{target}^{{commit}}")])?;
+                runtime.git(&root, &["switch", "--detach", "--no-overwrite-ignore", "--no-recurse-submodules", "--", target])?
+            }
             "rename-branch" | "delete-branch" | "delete-tag" => {
                 let original = request.original.as_deref().ok_or("Select a reference first.")?;
                 let is_branch = request.action != "delete-tag";
@@ -436,17 +462,20 @@ fn execute_ref_action(runtime: Runtime, request: RefRequest) -> Result<CommitOut
     if let Err(error) = &result { runtime.event(0, "local", format!("Reference action reported an error; review refreshed state: {error}")); }
     result
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn edit_reference(runtime: tauri::State<'_, Runtime>, request: RefRequest) -> Result<CommitOutcome, String> {
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || execute_ref_action(runtime, request)).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn inspect_commit(runtime: tauri::State<'_, Runtime>, path: String, sha: String) -> Result<String, String> {
     if ![40, 64].contains(&sha.len()) || !sha.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Invalid commit identifier.".into()); }
     let runtime = runtime.inner().clone();
     tauri::async_runtime::spawn_blocking(move || runtime.git(&repository(&path)?, &["show", "--no-ext-diff", "--no-textconv", "--no-color", "--format=fuller", &sha, "--"])).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn watch_repository(runtime: tauri::State<'_, Runtime>, path: String) -> Result<(), String> {
     if runtime.watch.swap(true, Ordering::SeqCst) { return Err("A refresh walkthrough is already running.".into()); }
@@ -467,8 +496,10 @@ async fn watch_repository(runtime: tauri::State<'_, Runtime>, path: String) -> R
         result
     }).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn stop_watch(runtime: tauri::State<'_, Runtime>) { runtime.watch.store(false, Ordering::SeqCst); runtime.event(0, "local", "Requested stop: remaining refresh checks will not be scheduled."); }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn demonstrate_failure(runtime: tauri::State<'_, Runtime>, path: String) -> Result<(), String> {
     let runtime = runtime.inner().clone();
@@ -478,6 +509,7 @@ async fn demonstrate_failure(runtime: tauri::State<'_, Runtime>, path: String) -
         runtime.git(&root, &["rev-parse", "--verify", &missing]).map(|_| ())
     }).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, String> {
     let runtime = runtime.inner().clone();
@@ -522,11 +554,15 @@ async fn create_demo(runtime: tauri::State<'_, Runtime>) -> Result<String, Strin
         Ok(display_path(&root))
     }).await.map_err(|e| e.to_string())?
 }
+#[cfg(feature = "desktop")]
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Runtime::default())
         .invoke_handler(tauri::generate_handler![initial_path, record_interface, journal, open_repository, inspect_file, change_index, latest_message, create_commit, change_branch, edit_reference, inspect_tag, inspect_commit, watch_repository, stop_watch, demonstrate_failure, create_demo])
         .run(tauri::generate_context!()).expect("Could not launch Git-K prototype");
 }
+
+#[cfg(not(feature = "desktop"))]
+fn main() { eprintln!("Enable the desktop feature to launch the Tauri application."); }
 
 #[cfg(test)]
 mod ref_tests;

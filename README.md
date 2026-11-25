@@ -4,6 +4,8 @@ A planned Tauri + Rust + React/TypeScript desktop Git manager targeting GitKrake
 
 ## Current state
 
+Current implementation checkpoint, November 25, 2026: **Phase B, prototype work corresponding to item 014 — detached HEAD and commit preservation**. The [new increment](apps/command-prototype/DETACHED.md) adds historical-commit checkout, a persistent detached-state warning, recovery context and branch preservation. The frontend build, 10 real-Git regressions and browser UI smoke checks passed; native validation for this increment remains pending. Production tickets retain their decision gates; this is not 14 completed production slices.
+
 The user requested reviewed integration of all local branches into `main`. The [integration review](docs/reviews/main-integration.md) accounts for every branch, the separate Standards/Spec reviews, the corrected command-display issue and validation. Source placement in `main` does not change the prototype status or close production decision gates.
 
 This branch contains a [Tauri + Rust + React execution prototype](apps/command-prototype/README.md) for real repository inspection and command recording. The Windows executable built and passed the [native UI walkthrough](apps/command-prototype/VALIDATION.md), including recording while the activity panel was collapsed. This is throwaway code for the open execution-contract decision, not the production Git manager.

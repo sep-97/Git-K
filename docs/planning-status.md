@@ -2,6 +2,8 @@
 
 Snapshot: October 30, 2026 (Asia/Tehran).
 
+Implementation update, November 25, 2026: the planning snapshot below predates the runnable prototype. Current work is **Phase B, prototype support for item 014: detached HEAD and commit preservation**, following repository inspection, staging, commits, amend, branches and local tags. [Current evidence](../apps/command-prototype/DETACHED.md) records a passing frontend build, 10 real-Git regressions and browser UI checks; native validation for this increment remains pending. Production execution/native-support gates remain open and no production slice is marked complete. The [implementation tracker](../.scratch/git-k-implementation/README.md) owns the current work state.
+
 ## Confirmed direction
 
 Tauri + Rust + React/TypeScript; GitKraken Desktop 12.6.1 parity; Windows validation first, then macOS and Linux; equivalent self-hosted services first; collapsible terminal/activity panel with continuous application-action recording. Future reference releases are tracked separately.

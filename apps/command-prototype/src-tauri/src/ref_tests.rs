@@ -20,7 +20,8 @@ impl Fixture {
     fn req(&self, action: &str, name: &str, original: Option<&str>) -> RefRequest {
         let head = self.git(&["rev-parse", "HEAD"]).trim().into();
         let expected_oid = original.map(|name| self.git(&["show-ref", "--hash", "--verify", &format!("refs/{}/{name}", if action == "delete-tag" { "tags" } else { "heads" })]).trim().into());
-        RefRequest { path: display_path(&self.root), expected_head: head, expected_branch: self.git(&["branch", "--show-current"]).trim().into(), action: action.into(), name: name.into(), original: original.map(String::from), expected_oid, start_point: Some(self.git(&["rev-parse", "HEAD"]).trim().into()), annotated: false, message: None }
+        let branch = self.git(&["branch", "--show-current"]);
+        RefRequest { path: display_path(&self.root), expected_head: head, expected_branch: if branch.trim().is_empty() { "Detached HEAD".into() } else { branch.trim().into() }, action: action.into(), name: name.into(), original: original.map(String::from), expected_oid, start_point: Some(self.git(&["rev-parse", "HEAD"]).trim().into()), annotated: false, message: None }
     }
     fn apply(&self, request: RefRequest) -> Result<CommitOutcome, String> { execute_ref_action(self.runtime.clone(), request) }
     fn exists(&self, name: &str) -> bool { self.runtime.git(&self.root, &["show-ref", "--verify", "--quiet", name]).is_ok() }
@@ -32,6 +33,14 @@ impl Fixture {
         assert_eq!(self.git(&["show", ":file.txt"]), "staged\n");
         assert_eq!(fs::read_to_string(self.root.join("file.txt")).unwrap(), "working\n");
         assert_eq!(fs::read_to_string(self.root.join("untracked.txt")).unwrap(), "keep\n");
+    }
+    fn hook(&self, name: &str, script: &str) {
+        let path = self.root.join(".git/test-hooks").join(name);
+        fs::write(&path, script).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 }
 
@@ -101,11 +110,112 @@ fn tags_preserve_literal_annotations_and_reject_stale_deletion() {
 #[test]
 fn completed_ref_change_survives_a_refresh_failure() {
     let f = Fixture::new();
-    fs::write(f.root.join(".git/test-hooks/reference-transaction"), "#!/bin/sh\nif [ \"$1\" = committed ]; then\n git config --local core.worktree /git-k-reference-missing-worktree\nfi\n").unwrap();
+    f.hook("reference-transaction", "#!/bin/sh\nif [ \"$1\" = committed ]; then\n git config --local core.worktree /git-k-reference-missing-worktree\nfi\n");
     let result = f.apply(f.req("create-tag", "created-before-read-failed", None)).unwrap();
     assert!(result.snapshot.is_none()); assert!(result.refresh_error.is_some());
     let worktree = format!("core.worktree={}", display_path(&f.root));
     assert!(f.runtime.git(&f.root, &["-c", &worktree, "show-ref", "--verify", "refs/tags/created-before-read-failed"]).is_ok());
+}
+
+#[test]
+fn checkout_commit_detaches_without_changing_branches_or_local_files() {
+    let f = Fixture::new(); f.dirty();
+    let request = f.req("checkout-commit", "", None);
+    let head = request.expected_head.clone();
+    let outcome = f.apply(request).unwrap();
+    let state = outcome.snapshot.unwrap();
+    assert_eq!(state.branch, "Detached HEAD"); assert_eq!(state.head, head);
+    assert_eq!(f.git(&["branch", "--show-current"]), "");
+    assert_eq!(f.git(&["rev-parse", "refs/heads/main"]).trim(), head);
+    f.assert_dirty();
+    let events = f.runtime.events.lock().unwrap();
+    assert!(events.iter().any(|event| event.kind == "command" && event.text.contains("switch") && event.text.contains("--detach")));
+}
+
+#[test]
+fn detached_commits_remain_visible_in_the_history_snapshot() {
+    let f = Fixture::new(); let baseline = f.git(&["rev-parse", "HEAD"]).trim().to_string();
+    f.apply(f.req("checkout-commit", "", None)).unwrap();
+    fs::write(f.root.join("detached.txt"), "detached work\n").unwrap();
+    fs::write(f.root.join("untracked.txt"), "keep\n").unwrap();
+    f.git(&["add", "--", "detached.txt"]);
+    let outcome = execute_commit(f.runtime.clone(), display_path(&f.root), baseline.clone(), "Detached HEAD".into(), "Detached work".into(), "Description".into(), false).unwrap();
+    let state = outcome.snapshot.unwrap(); let head = state.head;
+    assert!(state.commits.iter().any(|commit| commit.sha == head), "Detached HEAD must remain visible even when no branch contains it");
+    assert_eq!(f.git(&["show", "HEAD:detached.txt"]), "detached work\n");
+    assert_eq!(f.git(&["rev-parse", "refs/heads/main"]).trim(), baseline);
+    let saved = execute_branch(f.runtime.clone(), display_path(&f.root), head.clone(), "Detached HEAD".into(), "saved&literal".into(), Some(head.clone()), true).unwrap();
+    assert_eq!(saved.snapshot.unwrap().branch, "saved&literal");
+    let returned = execute_branch(f.runtime.clone(), display_path(&f.root), head.clone(), "saved&literal".into(), "main".into(), None, true).unwrap();
+    assert_eq!(returned.snapshot.unwrap().branch, "main");
+    assert_eq!(f.git(&["rev-parse", "refs/heads/saved&literal"]).trim(), head);
+    assert_eq!(f.git(&["show", "refs/heads/saved&literal:detached.txt"]), "detached work\n");
+    assert_eq!(fs::read_to_string(f.root.join("untracked.txt")).unwrap(), "keep\n");
+}
+
+#[test]
+fn commit_checkout_refuses_stale_sources_invalid_targets_and_unfinished_operations() {
+    let f = Fixture::new(); let stale = f.req("checkout-commit", "", None);
+    f.git(&["switch", "-c", "external"]);
+    assert!(f.apply(stale).err().unwrap().contains("branch or HEAD changed"));
+    for target in ["HEAD", "--force", &"f".repeat(40), f.git(&["rev-parse", "HEAD:file.txt"]).trim()] {
+        let mut request = f.req("checkout-commit", "", None); request.start_point = Some(target.into());
+        assert!(f.apply(request).is_err());
+        assert_eq!(f.git(&["branch", "--show-current"]).trim(), "external");
+    }
+    fs::write(f.root.join(".git/MERGE_HEAD"), f.git(&["rev-parse", "HEAD"])).unwrap();
+    assert!(f.apply(f.req("checkout-commit", "", None)).err().unwrap().contains("unfinished merge"));
+    assert_eq!(f.git(&["branch", "--show-current"]).trim(), "external");
+}
+
+#[test]
+fn commit_checkout_preserves_tracked_untracked_and_ignored_collisions() {
+    let f = Fixture::new(); let baseline = f.git(&["rev-parse", "HEAD"]);
+    fs::write(f.root.join("file.txt"), "different history\n").unwrap();
+    f.git(&["add", "--", "file.txt"]); f.git(&["commit", "-m", "Different history"]); f.dirty();
+    let mut request = f.req("checkout-commit", "", None); request.start_point = Some(baseline.trim().into());
+    assert!(f.apply(request).is_err()); f.assert_dirty();
+    assert_eq!(f.git(&["branch", "--show-current"]).trim(), "main");
+    for ignored in [false, true] {
+        let f = Fixture::new(); let baseline = f.git(&["rev-parse", "HEAD"]);
+        fs::write(f.root.join("collision.txt"), "committed\n").unwrap();
+        f.git(&["add", "--", "collision.txt"]); f.git(&["commit", "-m", "Track collision"]);
+        let target = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["switch", "--detach", baseline.trim()]);
+        if ignored { fs::write(f.root.join(".git/info/exclude"), "collision.txt\n").unwrap(); }
+        fs::write(f.root.join("collision.txt"), "local work\n").unwrap();
+        let mut request = f.req("checkout-commit", "", None); request.start_point = Some(target.trim().into());
+        assert!(f.apply(request).is_err());
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), baseline);
+        assert_eq!(fs::read_to_string(f.root.join("collision.txt")).unwrap(), "local work\n");
+    }
+}
+
+#[test]
+fn leaving_detached_head_retains_reflog_recovery_context() {
+    let f = Fixture::new(); f.apply(f.req("checkout-commit", "", None)).unwrap();
+    f.git(&["commit", "--allow-empty", "-m", "Unattached work"]);
+    let head = f.git(&["rev-parse", "HEAD"]).trim().to_string();
+    execute_branch(f.runtime.clone(), display_path(&f.root), head.clone(), "Detached HEAD".into(), "main".into(), None, true).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD@{1}"]).trim(), head);
+    let mut request = f.req("checkout-commit", "", None); request.start_point = Some(head.clone());
+    assert_eq!(f.apply(request).unwrap().snapshot.unwrap().head, head);
+}
+
+#[test]
+fn detached_checkout_reports_hook_errors_and_successful_writes_before_failed_reads() {
+    let f = Fixture::new();
+    f.hook("post-checkout", "#!/bin/sh\necho 'fixture hook rejected after switch' >&2\nexit 1\n");
+    assert!(f.apply(f.req("checkout-commit", "", None)).err().unwrap().contains("fixture hook rejected"));
+    assert_eq!(f.git(&["branch", "--show-current"]), "");
+    assert!(f.runtime.events.lock().unwrap().iter().any(|event| event.kind == "failed" && event.text.contains("exit 1")));
+    let f = Fixture::new(); let head = f.git(&["rev-parse", "HEAD"]);
+    f.hook("post-checkout", "#!/bin/sh\ngit config --local core.worktree /git-k-detached-missing-worktree\n");
+    let outcome = f.apply(f.req("checkout-commit", "", None)).unwrap();
+    assert!(outcome.snapshot.is_none()); assert!(outcome.refresh_error.is_some());
+    let worktree = format!("core.worktree={}", display_path(&f.root));
+    assert_eq!(f.git(&["-c", &worktree, "branch", "--show-current"]), "");
+    assert_eq!(f.git(&["-c", &worktree, "rev-parse", "HEAD"]), head);
 }
 
 #[cfg(windows)]

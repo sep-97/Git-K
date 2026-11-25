@@ -18,6 +18,8 @@ Published: October 30, 2026, following explicit user approval of the breakdown.
 
 ## Next actionable work
 
+Current checkpoint, November 25, 2026: **Phase B; execution-prototype work corresponding to [14: Work in detached HEAD and preserve commits](issues/014-work-in-detached-head-and-preserve-commits.md)**. [Prototype implementation and evidence](../../apps/command-prototype/DETACHED.md) cover commit checkout, detached-state/recovery context and branch preservation. Frontend, 10 real-Git tests and browser UI checks passed; native validation and user design review remain pending. All 126 published issue files (125 feature/delivery slices plus the final gate) remain blocked; nine envelopes remain pending decomposition. Prototype evidence does not complete those production issues.
+
 The existing [execution and repository coordination prototype](../gitkraken-parity/issues/05-execution-contract.md) is the next actionable map item. Native support decisions and matching-reference access can proceed independently where their prerequisites allow. Production slices remain blocked by the explicit contracts, including G5 and G8; publication does not resolve them.
 
 ## Published work and pending scope
